@@ -2,7 +2,7 @@
   "name": "Mindful Breathing",
   "short_name": "Breathing",
   "description": "Mindful breathing exercises for autonomic nervous system regulation",
-  "start_url": "/",
+  "start_url": "/Box-Breathing-App/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
