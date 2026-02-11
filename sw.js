@@ -1,11 +1,9 @@
 const CACHE_NAME = 'breathing-app-v1';
 const urlsToCache = [
-    '/',
-    '/index.html',
-    '/app.js',
-    '/manifest.json',
-    '/icon-192.png',
-    '/icon-512.png'
+    '/Box-Breathing-App/',
+    '/Box-Breathing-App/index.html',
+    '/Box-Breathing-App/app.js',
+    '/Box-Breathing-App/manifest.json'
 ];
 
 // Install service worker
