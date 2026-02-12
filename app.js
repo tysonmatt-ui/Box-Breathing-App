@@ -33,7 +33,17 @@ async function init() {
     
     loadState();
     if (state.notificationsEnabled) {
-        scheduleNextNotification();
+        // Check if we already have a scheduled notification
+        if (state.nextNotificationTime && state.nextNotificationTime > Date.now()) {
+            // Notification is still in the future, reschedule it
+            const timeUntilNotification = state.nextNotificationTime - Date.now();
+            notificationTimeout = setTimeout(() => {
+                checkAndShowNotification();
+            }, timeUntilNotification);
+        } else {
+            // No valid scheduled time, create a new one
+            scheduleNextNotification();
+        }
     }
     render();
 }
