@@ -13,6 +13,7 @@ let state = {
 
 let exerciseInterval = null;
 let notificationTimeout = null;
+let swRegistration = null;
 
 // DOM element
 const appContent = document.getElementById('appContent');
@@ -29,8 +30,23 @@ function log(message) {
 }
 
 // Initialize app
-function init() {
+async function init() {
     log('App initialized');
+    
+    // Register service worker and store registration
+    if ('serviceWorker' in navigator) {
+        try {
+            swRegistration = await navigator.serviceWorker.register('sw.js');
+            log('Service Worker registered successfully');
+            
+            // Wait for service worker to be ready
+            await navigator.serviceWorker.ready;
+            log('Service Worker is ready');
+        } catch (err) {
+            log(`Service Worker registration failed: ${err.message}`);
+        }
+    }
+    
     loadState();
     if (state.notificationsEnabled) {
         log('Notifications already enabled, scheduling next one');
@@ -72,6 +88,30 @@ function isWakingHours() {
     return result;
 }
 
+// Send notification via Service Worker
+async function sendNotification(title, body, tag) {
+    if (!swRegistration) {
+        log('ERROR: No service worker registration available');
+        return false;
+    }
+    
+    try {
+        await swRegistration.showNotification(title, {
+            body: body,
+            tag: tag,
+            icon: 'icon-192.png',
+            badge: 'icon-192.png',
+            requireInteraction: true,
+            vibrate: [200, 100, 200]
+        });
+        log(`✅ Notification sent: ${title}`);
+        return true;
+    } catch (e) {
+        log(`❌ ERROR sending notification: ${e.message}`);
+        return false;
+    }
+}
+
 // Request notification permission
 async function enableNotifications() {
     log('Requesting notification permission...');
@@ -79,6 +119,12 @@ async function enableNotifications() {
     if (!('Notification' in window)) {
         log('ERROR: Notifications not supported in this browser');
         alert('Notifications are not supported in this browser.');
+        return;
+    }
+    
+    if (!swRegistration) {
+        log('ERROR: Service Worker not ready yet');
+        alert('Please wait a moment and try again.');
         return;
     }
     
@@ -91,17 +137,13 @@ async function enableNotifications() {
         state.notificationsEnabled = true;
         saveState();
         
-        // Send a test notification immediately
-        log('Sending immediate test notification...');
-        try {
-            const testNotif = new Notification('Test Notification', {
-                body: 'If you see this, notifications are working!',
-                tag: 'test-notification'
-            });
-            log('Test notification sent successfully');
-        } catch (e) {
-            log(`ERROR sending test notification: ${e.message}`);
-        }
+        // Send a test notification immediately via Service Worker
+        log('Sending immediate test notification via Service Worker...');
+        await sendNotification(
+            'Test Notification',
+            'If you see this, notifications are working! Next one in 30 seconds.',
+            'test-notification'
+        );
         
         scheduleNextNotification();
         render();
@@ -113,7 +155,6 @@ async function enableNotifications() {
 
 // Schedule next notification - 30 SECONDS FOR TESTING
 function scheduleNextNotification() {
-    // ULTRA SHORT TEST: 30 seconds
     const delaySeconds = 30;
     state.nextNotificationTime = Date.now() + (delaySeconds * 1000);
     saveState();
@@ -135,7 +176,7 @@ function scheduleNextNotification() {
 }
 
 // Show notification if within waking hours
-function checkAndShowNotification() {
+async function checkAndShowNotification() {
     log('=== checkAndShowNotification called ===');
     const wakingHours = isWakingHours();
     
@@ -145,31 +186,19 @@ function checkAndShowNotification() {
         
         log(`Notification permission: ${Notification.permission}`);
         
-        if ('Notification' in window && Notification.permission === 'granted') {
-            log('Attempting to create notification...');
-            try {
-                const notification = new Notification('Mindful Breathing - DEBUG', {
-                    body: 'Shall we do some autonomic nervous system regulation? (30sec test)',
-                    tag: 'breathing-reminder',
-                    requireInteraction: true
-                });
-                
-                notification.onclick = () => {
-                    log('Notification clicked');
-                    window.focus();
-                    notification.close();
-                };
-                
-                notification.onerror = (e) => {
-                    log(`Notification error: ${e}`);
-                };
-                
-                log('✅ Notification created successfully!');
-            } catch (e) {
-                log(`❌ ERROR creating notification: ${e.message}`);
+        if (Notification.permission === 'granted' && swRegistration) {
+            log('Attempting to send notification via Service Worker...');
+            const success = await sendNotification(
+                'Mindful Breathing',
+                'Shall we do some autonomic nervous system regulation?',
+                'breathing-reminder'
+            );
+            
+            if (success) {
+                log('✅ Notification sent successfully!');
             }
         } else {
-            log(`❌ Cannot send notification. Permission: ${Notification.permission}`);
+            log(`❌ Cannot send notification. Permission: ${Notification.permission}, SW: ${!!swRegistration}`);
         }
         
         render();
@@ -294,7 +323,7 @@ function render() {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
             <h2>Enable Notifications (30 Second Test)</h2>
-            <p>This debug version will send a test notification immediately, then another in 30 seconds.</p>
+            <p>This version uses Service Worker notifications. You'll get a test notification immediately, then another in 30 seconds.</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
             <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
                 <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
@@ -346,8 +375,8 @@ function render() {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
             <h2>Debug Mode Active</h2>
-            <p>Next notification in ~30 seconds. Watch the countdown and debug log below.</p>
-            <p style="font-size: 14px; color: #ca8a04;">Keep this screen open and visible.</p>
+            <p>Next notification in ~30 seconds. You can close this tab and the notification should still appear!</p>
+            <p style="font-size: 14px; color: #ca8a04;">Try closing the app or switching to another tab.</p>
             <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
             <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
                 <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
