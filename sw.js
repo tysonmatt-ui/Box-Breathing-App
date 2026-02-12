@@ -36,3 +36,26 @@ self.addEventListener('activate', event => {
         })
     );
 });
+
+// Handle notification clicks
+self.addEventListener('notificationclick', event => {
+    console.log('Notification clicked:', event.notification.tag);
+    
+    event.notification.close();
+    
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then(clientList => {
+                // Check if there's already a window open with the app
+                for (let client of clientList) {
+                    if (client.url.includes('/Box-Breathing-App/') && 'focus' in client) {
+                        return client.focus();
+                    }
+                }
+                // If no window is open, open a new one
+                if (clients.openWindow) {
+                    return clients.openWindow('/Box-Breathing-App/');
+                }
+            })
+    );
+});
