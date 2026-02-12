@@ -7,8 +7,7 @@ let state = {
     cycle: 1,
     phaseTimer: 0,
     totalTimer: 0,
-    nextNotificationTime: null,
-    debugLog: []
+    nextNotificationTime: null
 };
 
 let exerciseInterval = null;
@@ -20,36 +19,20 @@ const appContent = document.getElementById('appContent');
 const nextReminder = document.getElementById('nextReminder');
 const notificationIcon = document.getElementById('notificationIcon');
 
-// Debug logging
-function log(message) {
-    const timestamp = new Date().toLocaleTimeString();
-    const logMsg = `[${timestamp}] ${message}`;
-    console.log(logMsg);
-    state.debugLog.push(logMsg);
-    if (state.debugLog.length > 20) state.debugLog.shift();
-}
-
 // Initialize app
 async function init() {
-    log('App initialized');
-    
     // Register service worker and store registration
     if ('serviceWorker' in navigator) {
         try {
             swRegistration = await navigator.serviceWorker.register('sw.js');
-            log('Service Worker registered successfully');
-            
-            // Wait for service worker to be ready
             await navigator.serviceWorker.ready;
-            log('Service Worker is ready');
         } catch (err) {
-            log(`Service Worker registration failed: ${err.message}`);
+            console.log('Service Worker registration failed:', err);
         }
     }
     
     loadState();
     if (state.notificationsEnabled) {
-        log('Notifications already enabled, scheduling next one');
         scheduleNextNotification();
     }
     render();
@@ -61,7 +44,6 @@ function saveState() {
         notificationsEnabled: state.notificationsEnabled,
         nextNotificationTime: state.nextNotificationTime
     }));
-    log('State saved to localStorage');
 }
 
 // Load state from localStorage
@@ -71,7 +53,6 @@ function loadState() {
         const parsed = JSON.parse(saved);
         state.notificationsEnabled = parsed.notificationsEnabled || false;
         state.nextNotificationTime = parsed.nextNotificationTime || null;
-        log('State loaded from localStorage');
     }
 }
 
@@ -83,15 +64,12 @@ function isWakingHours() {
     const currentTime = hours * 60 + minutes;
     const startTime = 7 * 60;
     const endTime = 21 * 60 + 30;
-    const result = currentTime >= startTime && currentTime <= endTime;
-    log(`Waking hours check: ${result} (current time: ${hours}:${minutes})`);
-    return result;
+    return currentTime >= startTime && currentTime <= endTime;
 }
 
 // Send notification via Service Worker
 async function sendNotification(title, body, tag) {
     if (!swRegistration) {
-        log('ERROR: No service worker registration available');
         return false;
     }
     
@@ -104,115 +82,79 @@ async function sendNotification(title, body, tag) {
             requireInteraction: true,
             vibrate: [200, 100, 200]
         });
-        log(`✅ Notification sent: ${title}`);
         return true;
     } catch (e) {
-        log(`❌ ERROR sending notification: ${e.message}`);
+        console.error('Error sending notification:', e);
         return false;
     }
 }
 
 // Request notification permission
 async function enableNotifications() {
-    log('Requesting notification permission...');
-    
     if (!('Notification' in window)) {
-        log('ERROR: Notifications not supported in this browser');
         alert('Notifications are not supported in this browser.');
         return;
     }
     
     if (!swRegistration) {
-        log('ERROR: Service Worker not ready yet');
         alert('Please wait a moment and try again.');
         return;
     }
     
-    log(`Current permission status: ${Notification.permission}`);
-    
     const permission = await Notification.requestPermission();
-    log(`Permission result: ${permission}`);
     
     if (permission === 'granted') {
         state.notificationsEnabled = true;
         saveState();
-        
-        // Send a test notification immediately via Service Worker
-        log('Sending immediate test notification via Service Worker...');
-        await sendNotification(
-            'Test Notification',
-            'If you see this, notifications are working! Next one in 30 seconds.',
-            'test-notification'
-        );
-        
         scheduleNextNotification();
         render();
     } else {
-        log('Notification permission denied or dismissed');
         alert('Notifications were blocked. Please enable them in Chrome settings.');
     }
 }
 
-// Schedule next notification - 30 SECONDS FOR TESTING
+// Schedule next notification - 70-130 minutes
 function scheduleNextNotification() {
-    const delaySeconds = 30;
-    state.nextNotificationTime = Date.now() + (delaySeconds * 1000);
+    const minMinutes = 70;
+    const maxMinutes = 130;
+    const randomMinutes = Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes;
+    state.nextNotificationTime = Date.now() + (randomMinutes * 60 * 1000);
     saveState();
     
     if (notificationTimeout) {
-        log('Clearing existing notification timeout');
         clearTimeout(notificationTimeout);
     }
     
-    log(`Scheduling notification in ${delaySeconds} seconds`);
-    
     notificationTimeout = setTimeout(() => {
-        log('⏰ TIMEOUT FIRED! Attempting to show notification...');
         checkAndShowNotification();
-    }, delaySeconds * 1000);
+    }, randomMinutes * 60 * 1000);
     
-    log(`Timeout ID: ${notificationTimeout}`);
     render();
 }
 
 // Show notification if within waking hours
 async function checkAndShowNotification() {
-    log('=== checkAndShowNotification called ===');
     const wakingHours = isWakingHours();
     
     if (wakingHours) {
-        log('Within waking hours, showing notification');
         state.showNotification = true;
         
-        log(`Notification permission: ${Notification.permission}`);
-        
         if (Notification.permission === 'granted' && swRegistration) {
-            log('Attempting to send notification via Service Worker...');
-            const success = await sendNotification(
+            await sendNotification(
                 'Mindful Breathing',
                 'Shall we do some autonomic nervous system regulation?',
                 'breathing-reminder'
             );
-            
-            if (success) {
-                log('✅ Notification sent successfully!');
-            }
-        } else {
-            log(`❌ Cannot send notification. Permission: ${Notification.permission}, SW: ${!!swRegistration}`);
         }
         
         render();
-    } else {
-        log('Outside waking hours, skipping notification');
     }
     
-    log('Scheduling next notification...');
     scheduleNextNotification();
 }
 
 // Start breathing exercise
 function startExercise() {
-    log('Starting breathing exercise');
     state.showNotification = false;
     state.isExercising = true;
     state.cycle = 1;
@@ -255,7 +197,6 @@ function startExercise() {
             } else {
                 clearInterval(exerciseInterval);
                 state.isExercising = false;
-                log('Exercise complete');
                 scheduleNextNotification();
                 render();
                 return;
@@ -272,14 +213,12 @@ function stopExercise() {
         clearInterval(exerciseInterval);
     }
     state.isExercising = false;
-    log('Exercise stopped');
     render();
 }
 
 // Dismiss notification
 function dismissNotification() {
     state.showNotification = false;
-    log('Notification dismissed');
     scheduleNextNotification();
     render();
 }
@@ -305,16 +244,16 @@ function formatTime(seconds) {
 // Get next notification text
 function getNextNotificationText() {
     if (!state.nextNotificationTime) return '';
-    const secondsUntil = Math.floor((state.nextNotificationTime - Date.now()) / 1000);
-    if (secondsUntil < 0) return 'Overdue!';
-    return `${secondsUntil} seconds`;
+    const minutesUntil = Math.floor((state.nextNotificationTime - Date.now()) / 60000);
+    if (minutesUntil < 1) return 'Less than a minute';
+    return `~${minutesUntil} minutes`;
 }
 
 // Render app
 function render() {
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
     if (state.notificationsEnabled && state.nextNotificationTime) {
-        nextReminder.textContent = `DEBUG: Next in ${getNextNotificationText()}`;
+        nextReminder.textContent = `Next reminder in ${getNextNotificationText()}`;
     } else {
         nextReminder.textContent = '';
     }
@@ -322,30 +261,18 @@ function render() {
     if (!state.notificationsEnabled && !state.isExercising && !state.showNotification) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Enable Notifications (30 Second Test)</h2>
-            <p>This version uses Service Worker notifications. You'll get a test notification immediately, then another in 30 seconds.</p>
+            <h2>Enable Reminders</h2>
+            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
-            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
-                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
-                    <strong>Debug Log:</strong><br>
-                    ${state.debugLog.map(log => log + '<br>').join('')}
-                </div>
-            </div>
         `;
     } else if (state.showNotification) {
         appContent.innerHTML = `
             <div class="notification-card">
-                <h2>🎉 Notification Fired!</h2>
-                <p>The timeout worked! Did you also see a system notification?</p>
+                <h2>Time for a breath?</h2>
+                <p>Shall we do some autonomic nervous system regulation?</p>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="startExercise()">▶ Yes</button>
                     <button class="btn btn-secondary" onclick="dismissNotification()">✕ Not now</button>
-                </div>
-            </div>
-            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
-                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
-                    <strong>Debug Log:</strong><br>
-                    ${state.debugLog.map(log => log + '<br>').join('')}
                 </div>
             </div>
         `;
@@ -374,26 +301,19 @@ function render() {
     } else if (state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Debug Mode Active</h2>
-            <p>Next notification in ~30 seconds. You can close this tab and the notification should still appear!</p>
-            <p style="font-size: 14px; color: #ca8a04;">Try closing the app or switching to another tab.</p>
+            <h2>All Set!</h2>
+            <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
             <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
-            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
-                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
-                    <strong>Debug Log:</strong><br>
-                    ${state.debugLog.map(log => log + '<br>').join('')}
-                </div>
-            </div>
         `;
     }
 }
 
-// Update countdown every second
+// Update countdown every 30 seconds when not exercising
 setInterval(() => {
     if (state.notificationsEnabled && !state.isExercising) {
         render();
     }
-}, 1000);
+}, 30000);
 
 // Initialize on load
 init();
