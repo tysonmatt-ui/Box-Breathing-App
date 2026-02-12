@@ -7,7 +7,8 @@ let state = {
     cycle: 1,
     phaseTimer: 0,
     totalTimer: 0,
-    nextNotificationTime: null
+    nextNotificationTime: null,
+    debugLog: []
 };
 
 let exerciseInterval = null;
@@ -18,10 +19,21 @@ const appContent = document.getElementById('appContent');
 const nextReminder = document.getElementById('nextReminder');
 const notificationIcon = document.getElementById('notificationIcon');
 
+// Debug logging
+function log(message) {
+    const timestamp = new Date().toLocaleTimeString();
+    const logMsg = `[${timestamp}] ${message}`;
+    console.log(logMsg);
+    state.debugLog.push(logMsg);
+    if (state.debugLog.length > 20) state.debugLog.shift();
+}
+
 // Initialize app
 function init() {
+    log('App initialized');
     loadState();
     if (state.notificationsEnabled) {
+        log('Notifications already enabled, scheduling next one');
         scheduleNextNotification();
     }
     render();
@@ -33,6 +45,7 @@ function saveState() {
         notificationsEnabled: state.notificationsEnabled,
         nextNotificationTime: state.nextNotificationTime
     }));
+    log('State saved to localStorage');
 }
 
 // Load state from localStorage
@@ -42,6 +55,7 @@ function loadState() {
         const parsed = JSON.parse(saved);
         state.notificationsEnabled = parsed.notificationsEnabled || false;
         state.nextNotificationTime = parsed.nextNotificationTime || null;
+        log('State loaded from localStorage');
     }
 }
 
@@ -53,84 +67,123 @@ function isWakingHours() {
     const currentTime = hours * 60 + minutes;
     const startTime = 7 * 60;
     const endTime = 21 * 60 + 30;
-    return currentTime >= startTime && currentTime <= endTime;
+    const result = currentTime >= startTime && currentTime <= endTime;
+    log(`Waking hours check: ${result} (current time: ${hours}:${minutes})`);
+    return result;
 }
 
 // Request notification permission
 async function enableNotifications() {
-    if ('Notification' in window) {
-        const permission = await Notification.requestPermission();
-        if (permission === 'granted') {
-            state.notificationsEnabled = true;
-            saveState();
-            scheduleNextNotification();
-            render();
-        } else {
-            alert('Notifications were blocked. Please enable them in Chrome settings.');
-        }
-    } else {
+    log('Requesting notification permission...');
+    
+    if (!('Notification' in window)) {
+        log('ERROR: Notifications not supported in this browser');
         alert('Notifications are not supported in this browser.');
+        return;
+    }
+    
+    log(`Current permission status: ${Notification.permission}`);
+    
+    const permission = await Notification.requestPermission();
+    log(`Permission result: ${permission}`);
+    
+    if (permission === 'granted') {
+        state.notificationsEnabled = true;
+        saveState();
+        
+        // Send a test notification immediately
+        log('Sending immediate test notification...');
+        try {
+            const testNotif = new Notification('Test Notification', {
+                body: 'If you see this, notifications are working!',
+                tag: 'test-notification'
+            });
+            log('Test notification sent successfully');
+        } catch (e) {
+            log(`ERROR sending test notification: ${e.message}`);
+        }
+        
+        scheduleNextNotification();
+        render();
+    } else {
+        log('Notification permission denied or dismissed');
+        alert('Notifications were blocked. Please enable them in Chrome settings.');
     }
 }
 
-// Schedule next notification - SHORTENED TO 2 MINUTES FOR TESTING
+// Schedule next notification - 30 SECONDS FOR TESTING
 function scheduleNextNotification() {
-    // TEST MODE: 2 minutes instead of 70-130 minutes
-    const minMinutes = 2;
-    const maxMinutes = 2;
-    const randomMinutes = Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes;
-    state.nextNotificationTime = Date.now() + (randomMinutes * 60 * 1000);
+    // ULTRA SHORT TEST: 30 seconds
+    const delaySeconds = 30;
+    state.nextNotificationTime = Date.now() + (delaySeconds * 1000);
     saveState();
     
     if (notificationTimeout) {
+        log('Clearing existing notification timeout');
         clearTimeout(notificationTimeout);
     }
     
-    console.log(`Next notification scheduled in ${randomMinutes} minutes`);
+    log(`Scheduling notification in ${delaySeconds} seconds`);
     
     notificationTimeout = setTimeout(() => {
-        console.log('Notification timeout fired!');
+        log('⏰ TIMEOUT FIRED! Attempting to show notification...');
         checkAndShowNotification();
-    }, randomMinutes * 60 * 1000);
+    }, delaySeconds * 1000);
     
+    log(`Timeout ID: ${notificationTimeout}`);
     render();
 }
 
 // Show notification if within waking hours
 function checkAndShowNotification() {
-    console.log('Checking if should show notification...');
-    console.log('Is waking hours?', isWakingHours());
+    log('=== checkAndShowNotification called ===');
+    const wakingHours = isWakingHours();
     
-    if (isWakingHours()) {
+    if (wakingHours) {
+        log('Within waking hours, showing notification');
         state.showNotification = true;
         
+        log(`Notification permission: ${Notification.permission}`);
+        
         if ('Notification' in window && Notification.permission === 'granted') {
-            console.log('Sending notification...');
-            const notification = new Notification('Mindful Breathing - TEST', {
-                body: 'Shall we do some autonomic nervous system regulation?',
-                icon: 'icon-192.png',
-                badge: 'icon-192.png',
-                tag: 'breathing-reminder',
-                requireInteraction: true
-            });
-            
-            notification.onclick = () => {
-                window.focus();
-                notification.close();
-            };
+            log('Attempting to create notification...');
+            try {
+                const notification = new Notification('Mindful Breathing - DEBUG', {
+                    body: 'Shall we do some autonomic nervous system regulation? (30sec test)',
+                    tag: 'breathing-reminder',
+                    requireInteraction: true
+                });
+                
+                notification.onclick = () => {
+                    log('Notification clicked');
+                    window.focus();
+                    notification.close();
+                };
+                
+                notification.onerror = (e) => {
+                    log(`Notification error: ${e}`);
+                };
+                
+                log('✅ Notification created successfully!');
+            } catch (e) {
+                log(`❌ ERROR creating notification: ${e.message}`);
+            }
         } else {
-            console.log('Notification permission not granted');
+            log(`❌ Cannot send notification. Permission: ${Notification.permission}`);
         }
         
         render();
     } else {
-        console.log('Outside waking hours, skipping notification');
+        log('Outside waking hours, skipping notification');
     }
+    
+    log('Scheduling next notification...');
     scheduleNextNotification();
 }
 
 // Start breathing exercise
 function startExercise() {
+    log('Starting breathing exercise');
     state.showNotification = false;
     state.isExercising = true;
     state.cycle = 1;
@@ -152,7 +205,6 @@ function startExercise() {
         state.totalTimer = totalTime;
         state.phaseTimer = phaseTime;
         
-        // Phase transitions
         if (currentPhase === 'inhale' && phaseTime >= 4) {
             currentPhase = 'hold';
             phaseTime = 0;
@@ -174,6 +226,7 @@ function startExercise() {
             } else {
                 clearInterval(exerciseInterval);
                 state.isExercising = false;
+                log('Exercise complete');
                 scheduleNextNotification();
                 render();
                 return;
@@ -190,12 +243,14 @@ function stopExercise() {
         clearInterval(exerciseInterval);
     }
     state.isExercising = false;
+    log('Exercise stopped');
     render();
 }
 
 // Dismiss notification
 function dismissNotification() {
     state.showNotification = false;
+    log('Notification dismissed');
     scheduleNextNotification();
     render();
 }
@@ -222,38 +277,46 @@ function formatTime(seconds) {
 function getNextNotificationText() {
     if (!state.nextNotificationTime) return '';
     const secondsUntil = Math.floor((state.nextNotificationTime - Date.now()) / 1000);
-    if (secondsUntil < 60) return `${secondsUntil} seconds`;
-    const minutesUntil = Math.floor(secondsUntil / 60);
-    if (minutesUntil < 1) return 'Less than a minute';
-    return `${minutesUntil} minutes`;
+    if (secondsUntil < 0) return 'Overdue!';
+    return `${secondsUntil} seconds`;
 }
 
 // Render app
 function render() {
-    // Update header
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
     if (state.notificationsEnabled && state.nextNotificationTime) {
-        nextReminder.textContent = `TEST MODE: Next reminder in ${getNextNotificationText()}`;
+        nextReminder.textContent = `DEBUG: Next in ${getNextNotificationText()}`;
     } else {
         nextReminder.textContent = '';
     }
     
-    // Render main content
     if (!state.notificationsEnabled && !state.isExercising && !state.showNotification) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Enable Reminders (TEST MODE)</h2>
-            <p>This is a test version with 2-minute reminders instead of 70-130 minutes. Allow notifications to test if they work.</p>
+            <h2>Enable Notifications (30 Second Test)</h2>
+            <p>This debug version will send a test notification immediately, then another in 30 seconds.</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
+            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
+                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
+                    <strong>Debug Log:</strong><br>
+                    ${state.debugLog.map(log => log + '<br>').join('')}
+                </div>
+            </div>
         `;
     } else if (state.showNotification) {
         appContent.innerHTML = `
             <div class="notification-card">
-                <h2>Time for a breath? (TEST)</h2>
-                <p>Shall we do some autonomic nervous system regulation?</p>
+                <h2>🎉 Notification Fired!</h2>
+                <p>The timeout worked! Did you also see a system notification?</p>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="startExercise()">▶ Yes</button>
                     <button class="btn btn-secondary" onclick="dismissNotification()">✕ Not now</button>
+                </div>
+            </div>
+            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
+                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
+                    <strong>Debug Log:</strong><br>
+                    ${state.debugLog.map(log => log + '<br>').join('')}
                 </div>
             </div>
         `;
@@ -282,13 +345,26 @@ function render() {
     } else if (state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Test Mode Active!</h2>
-            <p>You'll receive a reminder in ~2 minutes. Keep Chrome running in the background.</p>
-            <p style="font-size: 14px; color: #ca8a04; margin-top: 16px;">Check the timer at the top to see countdown.</p>
+            <h2>Debug Mode Active</h2>
+            <p>Next notification in ~30 seconds. Watch the countdown and debug log below.</p>
+            <p style="font-size: 14px; color: #ca8a04;">Keep this screen open and visible.</p>
             <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
+            <div style="margin-top: 24px; text-align: left; background: #1f2937; padding: 16px; border-radius: 8px; max-height: 300px; overflow-y: auto;">
+                <div style="font-size: 12px; color: #9ca3af; font-family: monospace;">
+                    <strong>Debug Log:</strong><br>
+                    ${state.debugLog.map(log => log + '<br>').join('')}
+                </div>
+            </div>
         `;
     }
 }
+
+// Update countdown every second
+setInterval(() => {
+    if (state.notificationsEnabled && !state.isExercising) {
+        render();
+    }
+}, 1000);
 
 // Initialize on load
 init();
