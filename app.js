@@ -65,14 +65,19 @@ async function enableNotifications() {
             saveState();
             scheduleNextNotification();
             render();
+        } else {
+            alert('Notifications were blocked. Please enable them in Chrome settings.');
         }
+    } else {
+        alert('Notifications are not supported in this browser.');
     }
 }
 
-// Schedule next notification
+// Schedule next notification - SHORTENED TO 2 MINUTES FOR TESTING
 function scheduleNextNotification() {
-    const minMinutes = 70;
-    const maxMinutes = 130;
+    // TEST MODE: 2 minutes instead of 70-130 minutes
+    const minMinutes = 2;
+    const maxMinutes = 2;
     const randomMinutes = Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes;
     state.nextNotificationTime = Date.now() + (randomMinutes * 60 * 1000);
     saveState();
@@ -81,7 +86,10 @@ function scheduleNextNotification() {
         clearTimeout(notificationTimeout);
     }
     
+    console.log(`Next notification scheduled in ${randomMinutes} minutes`);
+    
     notificationTimeout = setTimeout(() => {
+        console.log('Notification timeout fired!');
         checkAndShowNotification();
     }, randomMinutes * 60 * 1000);
     
@@ -90,11 +98,15 @@ function scheduleNextNotification() {
 
 // Show notification if within waking hours
 function checkAndShowNotification() {
+    console.log('Checking if should show notification...');
+    console.log('Is waking hours?', isWakingHours());
+    
     if (isWakingHours()) {
         state.showNotification = true;
         
         if ('Notification' in window && Notification.permission === 'granted') {
-            const notification = new Notification('Mindful Breathing', {
+            console.log('Sending notification...');
+            const notification = new Notification('Mindful Breathing - TEST', {
                 body: 'Shall we do some autonomic nervous system regulation?',
                 icon: 'icon-192.png',
                 badge: 'icon-192.png',
@@ -106,9 +118,13 @@ function checkAndShowNotification() {
                 window.focus();
                 notification.close();
             };
+        } else {
+            console.log('Notification permission not granted');
         }
         
         render();
+    } else {
+        console.log('Outside waking hours, skipping notification');
     }
     scheduleNextNotification();
 }
@@ -205,9 +221,11 @@ function formatTime(seconds) {
 // Get next notification text
 function getNextNotificationText() {
     if (!state.nextNotificationTime) return '';
-    const minutesUntil = Math.floor((state.nextNotificationTime - Date.now()) / 60000);
+    const secondsUntil = Math.floor((state.nextNotificationTime - Date.now()) / 1000);
+    if (secondsUntil < 60) return `${secondsUntil} seconds`;
+    const minutesUntil = Math.floor(secondsUntil / 60);
     if (minutesUntil < 1) return 'Less than a minute';
-    return `~${minutesUntil} minutes`;
+    return `${minutesUntil} minutes`;
 }
 
 // Render app
@@ -215,7 +233,7 @@ function render() {
     // Update header
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
     if (state.notificationsEnabled && state.nextNotificationTime) {
-        nextReminder.textContent = `Next reminder in ${getNextNotificationText()}`;
+        nextReminder.textContent = `TEST MODE: Next reminder in ${getNextNotificationText()}`;
     } else {
         nextReminder.textContent = '';
     }
@@ -224,14 +242,14 @@ function render() {
     if (!state.notificationsEnabled && !state.isExercising && !state.showNotification) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Enable Reminders</h2>
-            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
+            <h2>Enable Reminders (TEST MODE)</h2>
+            <p>This is a test version with 2-minute reminders instead of 70-130 minutes. Allow notifications to test if they work.</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
         `;
     } else if (state.showNotification) {
         appContent.innerHTML = `
             <div class="notification-card">
-                <h2>Time for a breath?</h2>
+                <h2>Time for a breath? (TEST)</h2>
                 <p>Shall we do some autonomic nervous system regulation?</p>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="startExercise()">▶ Yes</button>
@@ -264,8 +282,9 @@ function render() {
     } else if (state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>All Set!</h2>
-            <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
+            <h2>Test Mode Active!</h2>
+            <p>You'll receive a reminder in ~2 minutes. Keep Chrome running in the background.</p>
+            <p style="font-size: 14px; color: #ca8a04; margin-top: 16px;">Check the timer at the top to see countdown.</p>
             <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
         `;
     }
