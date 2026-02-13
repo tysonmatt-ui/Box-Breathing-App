@@ -7,18 +7,11 @@ let state = {
     cycle: 1,
     phaseTimer: 0,
     totalTimer: 0,
-    nextNotificationTime: null,
-    diagnostics: {
-        lastInit: null,
-        timerScheduled: false,
-        timeoutId: null,
-        swReady: false,
-        permissionStatus: null
-    }
+    nextNotificationTime: null
 };
 
 let exerciseInterval = null;
-let notificationTimeout = null;
+let notificationCheckInterval = null;
 let swRegistration = null;
 
 // DOM element
@@ -28,37 +21,18 @@ const notificationIcon = document.getElementById('notificationIcon');
 
 // Initialize app
 async function init() {
-    state.diagnostics.lastInit = new Date().toISOString();
-    
-    // Register service worker and store registration
     if ('serviceWorker' in navigator) {
         try {
             swRegistration = await navigator.serviceWorker.register('sw.js');
             await navigator.serviceWorker.ready;
-            state.diagnostics.swReady = true;
         } catch (err) {
             console.log('Service Worker registration failed:', err);
-            state.diagnostics.swReady = false;
         }
     }
     
     loadState();
-    state.diagnostics.permissionStatus = Notification.permission;
-    
-    if (state.notificationsEnabled) {
-        // Check if we already have a scheduled notification
-        if (state.nextNotificationTime && state.nextNotificationTime > Date.now()) {
-            // Notification is still in the future, reschedule it
-            const timeUntilNotification = state.nextNotificationTime - Date.now();
-            notificationTimeout = setTimeout(() => {
-                checkAndShowNotification();
-            }, timeUntilNotification);
-            state.diagnostics.timerScheduled = true;
-            state.diagnostics.timeoutId = notificationTimeout;
-        } else {
-            // No valid scheduled time, create a new one
-            scheduleNextNotification();
-        }
+    if (state.notificationsEnabled && state.nextNotificationTime) {
+        startNotificationChecks();
     }
     render();
 }
@@ -114,22 +88,6 @@ async function sendNotification(title, body, tag) {
     }
 }
 
-// Reset everything
-function resetApp() {
-    if (confirm('This will clear all settings and timers. Continue?')) {
-        localStorage.removeItem('breathingAppState');
-        if (notificationTimeout) {
-            clearTimeout(notificationTimeout);
-        }
-        state.notificationsEnabled = false;
-        state.nextNotificationTime = null;
-        state.diagnostics.timerScheduled = false;
-        state.diagnostics.timeoutId = null;
-        alert('App reset! Reload the page.');
-        location.reload();
-    }
-}
-
 // Request notification permission
 async function enableNotifications() {
     if (!('Notification' in window)) {
@@ -143,16 +101,15 @@ async function enableNotifications() {
     }
     
     const permission = await Notification.requestPermission();
-    state.diagnostics.permissionStatus = permission;
     
     if (permission === 'granted') {
         state.notificationsEnabled = true;
         saveState();
         
-        // Send test notification immediately
+        // Send test notification
         await sendNotification(
-            'Test - Notifications Working!',
-            'Your next reminder will arrive in 70-130 minutes.',
+            'Notifications Enabled!',
+            'Your first reminder will arrive in 70-130 minutes.',
             'test'
         );
         
@@ -160,6 +117,59 @@ async function enableNotifications() {
         render();
     } else {
         alert('Notifications were blocked. Please enable them in Chrome settings.');
+    }
+}
+
+// Start checking for notifications every 2 minutes
+function startNotificationChecks() {
+    if (notificationCheckInterval) {
+        clearInterval(notificationCheckInterval);
+    }
+    
+    // Check immediately
+    checkIfTimeToNotify();
+    
+    // Then check every 2 minutes (120000ms)
+    // This is short enough to work reliably on Android
+    notificationCheckInterval = setInterval(() => {
+        checkIfTimeToNotify();
+    }, 120000); // 2 minutes
+    
+    console.log('Started notification checks (every 2 minutes)');
+}
+
+// Check if it's time to send a notification
+async function checkIfTimeToNotify() {
+    const now = Date.now();
+    
+    // If no notification is scheduled, do nothing
+    if (!state.nextNotificationTime) {
+        return;
+    }
+    
+    // Check if we've passed the scheduled time
+    if (now >= state.nextNotificationTime) {
+        console.log('Time to notify!', new Date().toLocaleTimeString());
+        
+        const wakingHours = isWakingHours();
+        
+        if (wakingHours) {
+            state.showNotification = true;
+            
+            if (Notification.permission === 'granted' && swRegistration) {
+                await sendNotification(
+                    'Mindful Breathing',
+                    'Shall we do some autonomic nervous system regulation?',
+                    'breathing-reminder'
+                );
+            }
+            
+            render();
+        }
+        
+        // Clear the scheduled time so we don't notify again
+        state.nextNotificationTime = null;
+        saveState();
     }
 }
 
@@ -171,52 +181,11 @@ function scheduleNextNotification() {
     state.nextNotificationTime = Date.now() + (randomMinutes * 60 * 1000);
     saveState();
     
-    if (notificationTimeout) {
-        clearTimeout(notificationTimeout);
-    }
-    
-    notificationTimeout = setTimeout(() => {
-        checkAndShowNotification();
-    }, randomMinutes * 60 * 1000);
-    
-    state.diagnostics.timerScheduled = true;
-    state.diagnostics.timeoutId = notificationTimeout;
+    // Start the checking loop if not already running
+    startNotificationChecks();
     
     render();
-}
-
-// Show notification if within waking hours
-async function checkAndShowNotification() {
-    const now = new Date();
-    const wakingHours = isWakingHours();
-    
-    // Log when this fires
-    console.log('🔔 checkAndShowNotification fired at:', now.toLocaleTimeString());
-    console.log('Waking hours:', wakingHours);
-    console.log('Permission:', Notification.permission);
-    console.log('SW Registration:', !!swRegistration);
-    
-    // ALWAYS show the in-app notification card for testing
-    state.showNotification = true;
-    render();
-    
-    if (wakingHours) {
-        if (Notification.permission === 'granted' && swRegistration) {
-            console.log('Attempting to send notification...');
-            const success = await sendNotification(
-                'Mindful Breathing',
-                'Shall we do some autonomic nervous system regulation?',
-                'breathing-reminder'
-            );
-            console.log('Notification sent:', success);
-        } else {
-            console.log('Cannot send notification - permission or SW missing');
-        }
-    } else {
-        console.log('Outside waking hours - notification suppressed but in-app card shown');
-    }
-    
-    // Don't schedule next one yet - let user dismiss first
+    console.log(`Next notification scheduled for: ${new Date(state.nextNotificationTime).toLocaleTimeString()}`);
 }
 
 // Start breathing exercise
@@ -284,7 +253,6 @@ function stopExercise() {
 
 // Dismiss notification
 function dismissNotification() {
-    console.log('Notification dismissed by user');
     state.showNotification = false;
     scheduleNextNotification();
     render();
@@ -312,37 +280,9 @@ function formatTime(seconds) {
 function getNextNotificationText() {
     if (!state.nextNotificationTime) return 'Not scheduled';
     const minutesUntil = Math.floor((state.nextNotificationTime - Date.now()) / 60000);
-    if (minutesUntil < 0) return 'Overdue!';
+    if (minutesUntil < 0) return 'Due now!';
     if (minutesUntil < 1) return 'Less than a minute';
     return `~${minutesUntil} minutes`;
-}
-
-// Get diagnostic info
-function getDiagnosticInfo() {
-    const now = Date.now();
-    const nextTime = state.nextNotificationTime;
-    const timeUntil = nextTime ? Math.floor((nextTime - now) / 1000) : null;
-    const currentTime = new Date();
-    
-    return `
-        <div style="background: #1f2937; padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 11px; font-family: monospace; text-align: left;">
-            <strong style="color: #ca8a04;">DIAGNOSTICS:</strong><br>
-            Current Time: ${currentTime.toLocaleTimeString()}<br>
-            Notifications Enabled: ${state.notificationsEnabled ? '✅' : '❌'}<br>
-            Permission: ${state.diagnostics.permissionStatus}<br>
-            Service Worker Ready: ${state.diagnostics.swReady ? '✅' : '❌'}<br>
-            Timer Scheduled: ${state.diagnostics.timerScheduled ? '✅' : '❌'}<br>
-            Timeout ID: ${state.diagnostics.timeoutId || 'None'}<br>
-            Next Notification: ${nextTime ? new Date(nextTime).toLocaleTimeString() : 'None'}<br>
-            Time Until (seconds): ${timeUntil !== null ? timeUntil : 'N/A'}<br>
-            Last Init: ${state.diagnostics.lastInit ? new Date(state.diagnostics.lastInit).toLocaleTimeString() : 'Never'}<br>
-            Is Waking Hours: ${isWakingHours() ? '✅ YES' : '❌ NO (outside 7am-9:30pm)'}<br>
-            <br>
-            <strong style="color: #ca8a04;">WHAT TO WATCH:</strong><br>
-            When countdown hits 0, you should see an in-app card<br>
-            saying "Time for a breath?" Check console for logs.
-        </div>
-    `;
 }
 
 // Render app
@@ -351,17 +291,16 @@ function render() {
     if (state.notificationsEnabled && state.nextNotificationTime) {
         nextReminder.textContent = `Next reminder in ${getNextNotificationText()}`;
     } else {
-        nextReminder.textContent = state.notificationsEnabled ? 'No reminder scheduled' : '';
+        nextReminder.textContent = '';
     }
     
     if (!state.notificationsEnabled && !state.isExercising && !state.showNotification) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Enable Reminders (Diagnostic Mode)</h2>
-            <p>This version shows diagnostic information to help troubleshoot notification issues.</p>
+            <h2>Enable Reminders</h2>
+            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
+            <p style="font-size: 14px; color: #9ca3af; margin-top: 8px;">Uses 2-minute check intervals for reliability on Android</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
-            <button class="btn btn-secondary" onclick="resetApp()" style="margin-top: 12px;">Reset App</button>
-            ${getDiagnosticInfo()}
         `;
     } else if (state.showNotification) {
         appContent.innerHTML = `
@@ -373,7 +312,6 @@ function render() {
                     <button class="btn btn-secondary" onclick="dismissNotification()">✕ Not now</button>
                 </div>
             </div>
-            ${getDiagnosticInfo()}
         `;
     } else if (state.isExercising) {
         const phaseLabel = state.phase === 'inhale' ? 'Breathe In' : 
@@ -400,21 +338,19 @@ function render() {
     } else if (state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Diagnostic Mode Active</h2>
-            <p>Watch the diagnostic panel below to see if the timer is working correctly.</p>
+            <h2>All Set!</h2>
+            <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
             <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
-            <button class="btn btn-secondary" onclick="resetApp()" style="margin-top: 12px;">Reset App</button>
-            ${getDiagnosticInfo()}
         `;
     }
 }
 
-// Update every 5 seconds to show live diagnostics
+// Update countdown display every 30 seconds
 setInterval(() => {
     if (!state.isExercising) {
         render();
     }
-}, 5000);
+}, 30000);
 
 // Initialize on load
 init();
