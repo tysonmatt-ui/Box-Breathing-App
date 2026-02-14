@@ -103,8 +103,8 @@ async function enableNotifications() {
         saveState();
 
         await sendNotification(
-            'Notifications Enabled! (TEST MODE)',
-            'You will get a reminder every 1-3 minutes.',
+            'Notifications Enabled!',
+            'Your first breathing reminder is on its way.',
             'test'
         );
 
@@ -128,11 +128,11 @@ function disableNotifications() {
 
 // ─── Scheduling ───────────────────────────────────────────────────────────────
 
-// *** TEST: Check every 30 seconds ***
+// *** PRODUCTION: Check every 2 minutes ***
 function startNotificationChecks() {
     if (notificationCheckInterval) clearInterval(notificationCheckInterval);
     checkIfTimeToNotify();
-    notificationCheckInterval = setInterval(checkIfTimeToNotify, 30 * 1000); // 30 seconds
+    notificationCheckInterval = setInterval(checkIfTimeToNotify, 2 * 60 * 1000); // 2 minutes
 }
 
 async function checkIfTimeToNotify() {
@@ -157,9 +157,9 @@ async function checkIfTimeToNotify() {
     }
 }
 
-// *** TEST: 1-3 minutes instead of 70-130 ***
+// *** PRODUCTION: 70-130 minutes ***
 function scheduleNextNotification() {
-    const mins = Math.floor(Math.random() * 3) + 1; // 1-3 minutes
+    const mins = Math.floor(Math.random() * 61) + 70; // 70-130 minutes
     state.nextNotificationTime = Date.now() + mins * 60 * 1000;
     saveState();
     startNotificationChecks();
@@ -248,7 +248,7 @@ function getNextReminderText() {
 function render() {
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
     nextReminder.textContent = (state.notificationsEnabled && state.nextNotificationTime)
-        ? `TEST: Next reminder in ${getNextReminderText()}`
+        ? `Next reminder in ${getNextReminderText()}`
         : '';
 
     if (state.isExercising) {
@@ -287,21 +287,21 @@ function render() {
     if (!state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>Enable Reminders (TEST MODE)</h2>
-            <p>Notifications will fire every 1-3 minutes for testing purposes.</p>
+            <h2>Enable Reminders</h2>
+            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>`;
         return;
     }
 
     appContent.innerHTML = `
         <div class="idle-icon">🔔</div>
-        <h2>Test Mode Active</h2>
-        <p>Reminders every 1-3 minutes. Test all scenarios then we'll switch to production timing.</p>
+        <h2>All Set!</h2>
+        <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
         <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
         <button class="btn btn-secondary" style="margin-top:12px" onclick="disableNotifications()">Turn Off Reminders</button>`;
 }
 
-// Update countdown every 5 seconds (more frequent for testing)
+// Update countdown every 5 seconds
 setInterval(() => { if (!state.isExercising) render(); }, 5000);
 
 // Go!
