@@ -103,6 +103,94 @@
             font-weight: 600;
         }
 
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .stat-card {
+            background: #1f2937;
+            border: 1px solid rgba(202, 138, 4, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #ca8a04;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .calendar-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .cal-day {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .cal-dot {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #1f2937;
+            border: 2px solid #374151;
+        }
+
+        .cal-dot-done {
+            background: #ca8a04;
+            border-color: #ca8a04;
+        }
+
+        .cal-label {
+            font-size: 11px;
+            color: #6b7280;
+        }
+
+        .milestone-bar-wrap {
+            margin-top: 8px;
+        }
+
+        .milestone-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #9ca3af;
+            margin-bottom: 6px;
+        }
+
+        .milestone-bar {
+            height: 8px;
+            background: #1f2937;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .milestone-fill {
+            height: 100%;
+            background: #ca8a04;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
         .header h1 {
             font-size: 24px;
             font-weight: bold;
@@ -275,6 +363,7 @@
         <div class="header-content">
             <h1>Mindful Breathing</h1>
             <div style="display:flex;align-items:center;gap:12px">
+                <button id="statsBtn" class="gear-btn" onclick="state.screen='stats';render()" title="Stats">📊</button>
                 <button id="gearBtn" class="gear-btn" onclick="state.screen='settings';render()" title="Settings">⚙️</button>
                 <span id="notificationIcon">🔔</span>
             </div>
