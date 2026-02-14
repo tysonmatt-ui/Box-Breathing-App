@@ -11,184 +11,121 @@ let state = {
 };
 
 let exerciseInterval = null;
-let notificationCheckInterval = null;
 let swRegistration = null;
 
-// DOM element
 const appContent = document.getElementById('appContent');
 const nextReminder = document.getElementById('nextReminder');
 const notificationIcon = document.getElementById('notificationIcon');
 
-// Initialize app
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
 async function init() {
     if ('serviceWorker' in navigator) {
         try {
             swRegistration = await navigator.serviceWorker.register('sw.js');
             await navigator.serviceWorker.ready;
+
+            // Listen for messages from Service Worker
+            navigator.serviceWorker.addEventListener('message', onSWMessage);
         } catch (err) {
-            console.log('Service Worker registration failed:', err);
+            console.log('SW registration failed:', err);
         }
     }
-    
+
     loadState();
-    if (state.notificationsEnabled && state.nextNotificationTime) {
-        startNotificationChecks();
+
+    if (state.notificationsEnabled) {
+        // Ask SW for the current target time and restart its check loop
+        sendToSW({ type: 'GET_TARGET_TIME' });
     }
+
     render();
 }
 
-// Save state to localStorage
+// ─── SW Communication ─────────────────────────────────────────────────────────
+
+function sendToSW(message) {
+    if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage(message);
+    }
+}
+
+function onSWMessage(event) {
+    const { type } = event.data;
+
+    if (type === 'TARGET_TIME_SET') {
+        state.nextNotificationTime = event.data.targetTime;
+        saveState();
+        render();
+    }
+
+    if (type === 'SHOW_PROMPT') {
+        // SW is telling us a notification was sent - show in-app prompt too
+        state.showNotification = true;
+        render();
+    }
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
 function saveState() {
-    localStorage.setItem('breathingAppState', JSON.stringify({
+    localStorage.setItem('breathingApp', JSON.stringify({
         notificationsEnabled: state.notificationsEnabled,
         nextNotificationTime: state.nextNotificationTime
     }));
 }
 
-// Load state from localStorage
 function loadState() {
-    const saved = localStorage.getItem('breathingAppState');
-    if (saved) {
-        const parsed = JSON.parse(saved);
-        state.notificationsEnabled = parsed.notificationsEnabled || false;
-        state.nextNotificationTime = parsed.nextNotificationTime || null;
-    }
-}
-
-// Check if current time is within waking hours (7:00 - 21:30)
-function isWakingHours() {
-    const now = new Date();
-    const hours = now.getHours();
-    const minutes = now.getMinutes();
-    const currentTime = hours * 60 + minutes;
-    const startTime = 7 * 60;
-    const endTime = 21 * 60 + 30;
-    return currentTime >= startTime && currentTime <= endTime;
-}
-
-// Send notification via Service Worker
-async function sendNotification(title, body, tag) {
-    if (!swRegistration) {
-        return false;
-    }
-    
     try {
-        await swRegistration.showNotification(title, {
-            body: body,
-            tag: tag,
-            icon: 'icon-192.png',
-            badge: 'icon-192.png',
-            requireInteraction: true,
-            vibrate: [200, 100, 200]
-        });
-        return true;
+        const saved = JSON.parse(localStorage.getItem('breathingApp') || '{}');
+        state.notificationsEnabled = saved.notificationsEnabled || false;
+        state.nextNotificationTime = saved.nextNotificationTime || null;
     } catch (e) {
-        console.error('Error sending notification:', e);
-        return false;
+        console.log('Error loading state:', e);
     }
 }
 
-// Request notification permission
+// ─── Notifications ────────────────────────────────────────────────────────────
+
 async function enableNotifications() {
     if (!('Notification' in window)) {
         alert('Notifications are not supported in this browser.');
         return;
     }
-    
-    if (!swRegistration) {
-        alert('Please wait a moment and try again.');
+
+    if (!navigator.serviceWorker.controller) {
+        alert('App not ready yet. Please wait a moment and try again.');
         return;
     }
-    
+
     const permission = await Notification.requestPermission();
-    
+
     if (permission === 'granted') {
         state.notificationsEnabled = true;
         saveState();
-        
-        // Send test notification
-        await sendNotification(
-            'Notifications Enabled!',
-            'Your first reminder will arrive in 70-130 minutes.',
-            'test'
-        );
-        
-        scheduleNextNotification();
+
+        // Send test notification immediately
+        await swRegistration.showNotification('Notifications Enabled!', {
+            body: 'Your first breathing reminder is on its way.',
+            tag: 'test',
+            icon: 'icon-192.png'
+        });
+
+        // Tell SW to start scheduling
+        sendToSW({ type: 'START_SCHEDULING' });
         render();
     } else {
         alert('Notifications were blocked. Please enable them in Chrome settings.');
     }
 }
 
-// Start checking for notifications every 2 minutes
-function startNotificationChecks() {
-    if (notificationCheckInterval) {
-        clearInterval(notificationCheckInterval);
-    }
-    
-    // Check immediately
-    checkIfTimeToNotify();
-    
-    // Then check every 2 minutes (120000ms)
-    // This is short enough to work reliably on Android
-    notificationCheckInterval = setInterval(() => {
-        checkIfTimeToNotify();
-    }, 120000); // 2 minutes
-    
-    console.log('Started notification checks (every 2 minutes)');
-}
-
-// Check if it's time to send a notification
-async function checkIfTimeToNotify() {
-    const now = Date.now();
-    
-    // If no notification is scheduled, do nothing
-    if (!state.nextNotificationTime) {
-        return;
-    }
-    
-    // Check if we've passed the scheduled time
-    if (now >= state.nextNotificationTime) {
-        console.log('Time to notify!', new Date().toLocaleTimeString());
-        
-        const wakingHours = isWakingHours();
-        
-        if (wakingHours) {
-            state.showNotification = true;
-            
-            if (Notification.permission === 'granted' && swRegistration) {
-                await sendNotification(
-                    'Mindful Breathing',
-                    'Shall we do some autonomic nervous system regulation?',
-                    'breathing-reminder'
-                );
-            }
-            
-            render();
-        }
-        
-        // Clear the scheduled time so we don't notify again
-        state.nextNotificationTime = null;
-        saveState();
-    }
-}
-
-// Schedule next notification - 70-130 minutes
-function scheduleNextNotification() {
-    const minMinutes = 70;
-    const maxMinutes = 130;
-    const randomMinutes = Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes;
-    state.nextNotificationTime = Date.now() + (randomMinutes * 60 * 1000);
-    saveState();
-    
-    // Start the checking loop if not already running
-    startNotificationChecks();
-    
+function dismissNotification() {
+    state.showNotification = false;
     render();
-    console.log(`Next notification scheduled for: ${new Date(state.nextNotificationTime).toLocaleTimeString()}`);
 }
 
-// Start breathing exercise
+// ─── Breathing Exercise ───────────────────────────────────────────────────────
+
 function startExercise() {
     state.showNotification = false;
     state.isExercising = true;
@@ -196,113 +133,100 @@ function startExercise() {
     state.phase = 'inhale';
     state.phaseTimer = 0;
     state.totalTimer = 0;
-    
     render();
-    
+
     let totalTime = 0;
     let phaseTime = 0;
     let currentPhase = 'inhale';
     let currentCycle = 1;
-    
+
     exerciseInterval = setInterval(() => {
         totalTime += 0.1;
         phaseTime += 0.1;
-        
         state.totalTimer = totalTime;
         state.phaseTimer = phaseTime;
-        
+
         if (currentPhase === 'inhale' && phaseTime >= 4) {
-            currentPhase = 'hold';
-            phaseTime = 0;
-            state.phase = 'hold';
-            state.phaseTimer = 0;
+            currentPhase = 'hold'; phaseTime = 0;
+            state.phase = 'hold'; state.phaseTimer = 0;
         } else if (currentPhase === 'hold' && phaseTime >= 4) {
-            currentPhase = 'exhale';
-            phaseTime = 0;
-            state.phase = 'exhale';
-            state.phaseTimer = 0;
+            currentPhase = 'exhale'; phaseTime = 0;
+            state.phase = 'exhale'; state.phaseTimer = 0;
         } else if (currentPhase === 'exhale' && phaseTime >= 8) {
             if (currentCycle < 4) {
-                currentCycle += 1;
-                currentPhase = 'inhale';
-                phaseTime = 0;
+                currentCycle++;
+                currentPhase = 'inhale'; phaseTime = 0;
                 state.cycle = currentCycle;
-                state.phase = 'inhale';
-                state.phaseTimer = 0;
+                state.phase = 'inhale'; state.phaseTimer = 0;
             } else {
                 clearInterval(exerciseInterval);
                 state.isExercising = false;
-                scheduleNextNotification();
                 render();
                 return;
             }
         }
-        
         render();
     }, 100);
 }
 
-// Stop exercise
 function stopExercise() {
-    if (exerciseInterval) {
-        clearInterval(exerciseInterval);
-    }
+    if (exerciseInterval) clearInterval(exerciseInterval);
     state.isExercising = false;
     render();
 }
 
-// Dismiss notification
-function dismissNotification() {
-    state.showNotification = false;
-    scheduleNextNotification();
-    render();
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Get circle scale based on phase
 function getCircleScale() {
-    if (state.phase === 'inhale') {
-        return 0.5 + (state.phaseTimer / 4) * 0.5;
-    } else if (state.phase === 'hold') {
-        return 1;
-    } else {
-        return 1 - (state.phaseTimer / 8) * 0.5;
-    }
+    if (state.phase === 'inhale') return 0.5 + (state.phaseTimer / 4) * 0.5;
+    if (state.phase === 'hold') return 1;
+    return 1 - (state.phaseTimer / 8) * 0.5;
 }
 
-// Format time
-function formatTime(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+function formatTime(secs) {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Get next notification text
-function getNextNotificationText() {
-    if (!state.nextNotificationTime) return 'Not scheduled';
-    const minutesUntil = Math.floor((state.nextNotificationTime - Date.now()) / 60000);
-    if (minutesUntil < 0) return 'Due now!';
-    if (minutesUntil < 1) return 'Less than a minute';
-    return `~${minutesUntil} minutes`;
+function getNextReminderText() {
+    if (!state.nextNotificationTime) return '';
+    const mins = Math.floor((state.nextNotificationTime - Date.now()) / 60000);
+    if (mins < 0) return 'Any moment now...';
+    if (mins < 1) return 'Less than a minute';
+    return `~${mins} minutes`;
 }
 
-// Render app
+// ─── Render ───────────────────────────────────────────────────────────────────
+
 function render() {
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
-    if (state.notificationsEnabled && state.nextNotificationTime) {
-        nextReminder.textContent = `Next reminder in ${getNextNotificationText()}`;
-    } else {
-        nextReminder.textContent = '';
-    }
-    
-    if (!state.notificationsEnabled && !state.isExercising && !state.showNotification) {
+    nextReminder.textContent = (state.notificationsEnabled && state.nextNotificationTime)
+        ? `Next reminder in ${getNextReminderText()}`
+        : '';
+
+    if (state.isExercising) {
+        const label = { inhale: 'Breathe In', hold: 'Hold', exhale: 'Breathe Out' }[state.phase];
+        const max = { inhale: 4, hold: 4, exhale: 8 }[state.phase];
+        const countdown = Math.ceil(max - state.phaseTimer);
+        const scale = getCircleScale();
         appContent.innerHTML = `
-            <div class="idle-icon">🔔</div>
-            <h2>Enable Reminders</h2>
-            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
-            <p style="font-size: 14px; color: #9ca3af; margin-top: 8px;">Uses 2-minute check intervals for reliability on Android</p>
-            <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>
-        `;
-    } else if (state.showNotification) {
+            <div class="breathing-circle-container">
+                <div class="breathing-circle" style="transform:scale(${scale})"></div>
+                <div class="breathing-text">
+                    <div class="phase-label">${label}</div>
+                    <div class="phase-countdown">${countdown}</div>
+                </div>
+            </div>
+            <div class="progress-info">
+                <div class="cycle-info">Cycle ${state.cycle} of 4</div>
+                <div class="time-info">${formatTime(state.totalTimer)} / 1:04</div>
+            </div>
+            <button class="btn btn-secondary" onclick="stopExercise()">Stop Exercise</button>`;
+        return;
+    }
+
+    if (state.showNotification) {
         appContent.innerHTML = `
             <div class="notification-card">
                 <h2>Time for a breath?</h2>
@@ -311,46 +235,28 @@ function render() {
                     <button class="btn btn-primary" onclick="startExercise()">▶ Yes</button>
                     <button class="btn btn-secondary" onclick="dismissNotification()">✕ Not now</button>
                 </div>
-            </div>
-        `;
-    } else if (state.isExercising) {
-        const phaseLabel = state.phase === 'inhale' ? 'Breathe In' : 
-                          state.phase === 'hold' ? 'Hold' : 'Breathe Out';
-        const phaseMax = state.phase === 'inhale' ? 4 : 
-                        state.phase === 'hold' ? 4 : 8;
-        const countdown = Math.ceil(phaseMax - state.phaseTimer);
-        const scale = getCircleScale();
-        
-        appContent.innerHTML = `
-            <div class="breathing-circle-container">
-                <div class="breathing-circle" style="transform: scale(${scale})"></div>
-                <div class="breathing-text">
-                    <div class="phase-label">${phaseLabel}</div>
-                    <div class="phase-countdown">${countdown}</div>
-                </div>
-            </div>
-            <div class="progress-info">
-                <div class="cycle-info">Cycle ${state.cycle} of 4</div>
-                <div class="time-info">${formatTime(state.totalTimer)} / 1:04</div>
-            </div>
-            <button class="btn btn-secondary" onclick="stopExercise()">Stop Exercise</button>
-        `;
-    } else if (state.notificationsEnabled) {
+            </div>`;
+        return;
+    }
+
+    if (!state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
-            <h2>All Set!</h2>
-            <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
-            <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
-        `;
+            <h2>Enable Reminders</h2>
+            <p>Allow notifications to receive mindful breathing reminders throughout your day (7:00 AM - 9:30 PM)</p>
+            <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>`;
+        return;
     }
+
+    appContent.innerHTML = `
+        <div class="idle-icon">🔔</div>
+        <h2>All Set!</h2>
+        <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
+        <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>`;
 }
 
-// Update countdown display every 30 seconds
-setInterval(() => {
-    if (!state.isExercising) {
-        render();
-    }
-}, 30000);
+// Update countdown every 30 seconds
+setInterval(() => { if (!state.isExercising) render(); }, 30000);
 
-// Initialize on load
+// Go!
 init();
