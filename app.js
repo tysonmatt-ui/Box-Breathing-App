@@ -11,6 +11,7 @@ let state = {
 };
 
 let exerciseInterval = null;
+let notificationCheckInterval = null;
 let swRegistration = null;
 
 const appContent = document.getElementById('appContent');
@@ -24,9 +25,6 @@ async function init() {
         try {
             swRegistration = await navigator.serviceWorker.register('sw.js');
             await navigator.serviceWorker.ready;
-
-            // Listen for messages from Service Worker
-            navigator.serviceWorker.addEventListener('message', onSWMessage);
         } catch (err) {
             console.log('SW registration failed:', err);
         }
@@ -34,36 +32,11 @@ async function init() {
 
     loadState();
 
-    if (state.notificationsEnabled) {
-        // Ask SW for the current target time and restart its check loop
-        sendToSW({ type: 'GET_TARGET_TIME' });
+    if (state.notificationsEnabled && state.nextNotificationTime) {
+        startNotificationChecks();
     }
 
     render();
-}
-
-// ─── SW Communication ─────────────────────────────────────────────────────────
-
-function sendToSW(message) {
-    if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage(message);
-    }
-}
-
-function onSWMessage(event) {
-    const { type } = event.data;
-
-    if (type === 'TARGET_TIME_SET') {
-        state.nextNotificationTime = event.data.targetTime;
-        saveState();
-        render();
-    }
-
-    if (type === 'SHOW_PROMPT') {
-        // SW is telling us a notification was sent - show in-app prompt too
-        state.showNotification = true;
-        render();
-    }
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -85,15 +58,40 @@ function loadState() {
     }
 }
 
+// ─── Waking Hours ─────────────────────────────────────────────────────────────
+
+function isWakingHours() {
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    return mins >= 420 && mins <= 1290; // 07:00 - 21:30
+}
+
 // ─── Notifications ────────────────────────────────────────────────────────────
+
+async function sendNotification(title, body, tag) {
+    if (!swRegistration) return false;
+    try {
+        await swRegistration.showNotification(title, {
+            body,
+            tag,
+            icon: 'icon-192.png',
+            badge: 'icon-192.png',
+            requireInteraction: true,
+            vibrate: [200, 100, 200]
+        });
+        return true;
+    } catch (e) {
+        console.error('Notification error:', e);
+        return false;
+    }
+}
 
 async function enableNotifications() {
     if (!('Notification' in window)) {
         alert('Notifications are not supported in this browser.');
         return;
     }
-
-    if (!navigator.serviceWorker.controller) {
+    if (!swRegistration) {
         alert('App not ready yet. Please wait a moment and try again.');
         return;
     }
@@ -104,23 +102,76 @@ async function enableNotifications() {
         state.notificationsEnabled = true;
         saveState();
 
-        // Send test notification immediately
-        await swRegistration.showNotification('Notifications Enabled!', {
-            body: 'Your first breathing reminder is on its way.',
-            tag: 'test',
-            icon: 'icon-192.png'
-        });
+        await sendNotification(
+            'Notifications Enabled!',
+            'Your first breathing reminder is on its way.',
+            'test'
+        );
 
-        // Tell SW to start scheduling
-        sendToSW({ type: 'START_SCHEDULING' });
+        scheduleNextNotification();
         render();
     } else {
         alert('Notifications were blocked. Please enable them in Chrome settings.');
     }
 }
 
-function dismissNotification() {
-    state.showNotification = false;
+function disableNotifications() {
+    state.notificationsEnabled = false;
+    state.nextNotificationTime = null;
+    if (notificationCheckInterval) {
+        clearInterval(notificationCheckInterval);
+        notificationCheckInterval = null;
+    }
+    saveState();
+    render();
+}
+
+// ─── Scheduling ───────────────────────────────────────────────────────────────
+
+// Check every 2 minutes if it's time to notify.
+// 2 minutes is short enough to survive Android's background limits.
+function startNotificationChecks() {
+    if (notificationCheckInterval) clearInterval(notificationCheckInterval);
+
+    // Check immediately on start
+    checkIfTimeToNotify();
+
+    // Then check every 2 minutes
+    notificationCheckInterval = setInterval(checkIfTimeToNotify, 2 * 60 * 1000);
+}
+
+async function checkIfTimeToNotify() {
+    if (!state.nextNotificationTime) return;
+
+    const now = Date.now();
+
+    if (now >= state.nextNotificationTime) {
+        // Clear scheduled time first to prevent double-firing
+        state.nextNotificationTime = null;
+        saveState();
+
+        if (isWakingHours()) {
+            state.showNotification = true;
+            await sendNotification(
+                'Mindful Breathing',
+                'Shall we do some autonomic nervous system regulation?',
+                'breathing-reminder'
+            );
+            render();
+        }
+
+        // Always schedule the next one after firing
+        scheduleNextNotification();
+    }
+}
+
+function scheduleNextNotification() {
+    const minMins = 70;
+    const maxMins = 130;
+    const mins = Math.floor(Math.random() * (maxMins - minMins + 1)) + minMins;
+    state.nextNotificationTime = Date.now() + mins * 60 * 1000;
+    saveState();
+    startNotificationChecks();
     render();
 }
 
@@ -135,10 +186,8 @@ function startExercise() {
     state.totalTimer = 0;
     render();
 
-    let totalTime = 0;
-    let phaseTime = 0;
-    let currentPhase = 'inhale';
-    let currentCycle = 1;
+    let totalTime = 0, phaseTime = 0;
+    let currentPhase = 'inhale', currentCycle = 1;
 
     exerciseInterval = setInterval(() => {
         totalTime += 0.1;
@@ -161,6 +210,7 @@ function startExercise() {
             } else {
                 clearInterval(exerciseInterval);
                 state.isExercising = false;
+                scheduleNextNotification();
                 render();
                 return;
             }
@@ -172,6 +222,11 @@ function startExercise() {
 function stopExercise() {
     if (exerciseInterval) clearInterval(exerciseInterval);
     state.isExercising = false;
+    render();
+}
+
+function dismissNotification() {
+    state.showNotification = false;
     render();
 }
 
@@ -206,15 +261,14 @@ function render() {
         : '';
 
     if (state.isExercising) {
-        const label = { inhale: 'Breathe In', hold: 'Hold', exhale: 'Breathe Out' }[state.phase];
-        const max = { inhale: 4, hold: 4, exhale: 8 }[state.phase];
-        const countdown = Math.ceil(max - state.phaseTimer);
-        const scale = getCircleScale();
+        const labels = { inhale: 'Breathe In', hold: 'Hold', exhale: 'Breathe Out' };
+        const maxTimes = { inhale: 4, hold: 4, exhale: 8 };
+        const countdown = Math.ceil(maxTimes[state.phase] - state.phaseTimer);
         appContent.innerHTML = `
             <div class="breathing-circle-container">
-                <div class="breathing-circle" style="transform:scale(${scale})"></div>
+                <div class="breathing-circle" style="transform:scale(${getCircleScale()})"></div>
                 <div class="breathing-text">
-                    <div class="phase-label">${label}</div>
+                    <div class="phase-label">${labels[state.phase]}</div>
                     <div class="phase-countdown">${countdown}</div>
                 </div>
             </div>
@@ -252,7 +306,8 @@ function render() {
         <div class="idle-icon">🔔</div>
         <h2>All Set!</h2>
         <p>You'll receive reminders to practice mindful breathing throughout your waking hours.</p>
-        <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>`;
+        <button class="btn btn-primary" onclick="startExercise()">▶ Start Practice Now</button>
+        <button class="btn btn-secondary" style="margin-top:12px" onclick="disableNotifications()">Turn Off Reminders</button>`;
 }
 
 // Update countdown every 30 seconds
