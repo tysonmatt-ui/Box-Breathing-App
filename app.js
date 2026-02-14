@@ -178,7 +178,6 @@ function saveSettings() {
     const freqIdx   = parseInt(document.getElementById('freqSlider').value);
     const preset    = FREQ_PRESETS[freqIdx];
 
-    // Validate end is after start
     const startTotal = startHour * 60 + startMin;
     const endTotal   = endHour   * 60 + endMin;
     if (endTotal <= startTotal) {
@@ -194,7 +193,6 @@ function saveSettings() {
     };
     saveState();
 
-    // Reschedule with new settings
     if (state.notificationsEnabled) {
         scheduleNextNotification();
     }
@@ -206,15 +204,15 @@ function saveSettings() {
 function getCurrentFreqIndex() {
     const { freqMin, freqMax } = state.settings;
     const idx = FREQ_PRESETS.findIndex(p => p[0] === freqMin && p[1] === freqMax);
-    return idx >= 0 ? idx : 2; // default to index 2 (70-130 mins)
+    return idx >= 0 ? idx : 2;
 }
+
+function padTime(n) { return n.toString().padStart(2, '0'); }
 
 function onFreqSliderChange(val) {
     const preset = FREQ_PRESETS[parseInt(val)];
     document.getElementById('freqLabel').textContent = preset[2];
 }
-
-function padTime(n) { return n.toString().padStart(2, '0'); }
 
 // ─── Breathing Exercise ───────────────────────────────────────────────────────
 
@@ -300,18 +298,15 @@ function fmtHour(h, m) {
 // ─── Render ───────────────────────────────────────────────────────────────────
 
 function render() {
-    // Header
     notificationIcon.textContent = state.notificationsEnabled ? '🔔' : '🔕';
     nextReminder.textContent = (state.notificationsEnabled && state.nextNotificationTime)
         ? `Next reminder in ${getNextReminderText()}` : '';
 
-    // Gear icon in header (always visible except during exercise)
     const gearBtn = document.getElementById('gearBtn');
     if (gearBtn) {
         gearBtn.style.display = state.isExercising ? 'none' : 'block';
     }
 
-    // Screens
     if (state.screen === 'settings') { renderSettings(); return; }
     if (state.screen === 'about')    { renderAbout();    return; }
     renderMain();
@@ -375,7 +370,6 @@ function renderSettings() {
     const s = state.settings;
     const freqIdx = getCurrentFreqIndex();
 
-    // Build hour options
     const hourOpts = (sel) => Array.from({length: 24}, (_, i) =>
         `<option value="${i}" ${i === sel ? 'selected' : ''}>${padTime(i)}</option>`).join('');
     const minOpts = (sel) => [0, 15, 30, 45].map(m =>
@@ -405,11 +399,11 @@ function renderSettings() {
 
             <div class="settings-group">
                 <label class="settings-label">Reminder Frequency</label>
-                <input 
-                    type="range" 
-                    id="freqSlider" 
-                    min="0" 
-                    max="${FREQ_PRESETS.length - 1}" 
+                <input
+                    type="range"
+                    id="freqSlider"
+                    min="0"
+                    max="${FREQ_PRESETS.length - 1}"
                     value="${freqIdx}"
                     oninput="onFreqSliderChange(this.value)"
                     class="freq-slider"
