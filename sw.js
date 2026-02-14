@@ -80,47 +80,43 @@ async function sendBreathingNotification() {
 
     console.log('[SW] Notification sent at', new Date().toLocaleTimeString());
 
-    // Tell the app to show the prompt if it's open
     const allClients = await clients.matchAll({ type: 'window' });
     allClients.forEach(c => c.postMessage({ type: 'SHOW_PROMPT' }));
 }
 
-// Schedule the next check - runs every 2 minutes
-// Each check reads the target time from IndexedDB
+// *** TEST: Check every 30 seconds ***
 function scheduleNextCheck() {
     if (checkTimer) clearTimeout(checkTimer);
-    checkTimer = setTimeout(runCheck, 2 * 60 * 1000); // 2 minutes
-    console.log('[SW] Next check in 2 minutes');
+    checkTimer = setTimeout(runCheck, 30 * 1000); // 30 seconds
+    console.log('[SW] Next check in 30 seconds');
 }
 
-// Read target time from IndexedDB and decide whether to notify
 async function runCheck() {
     const targetTime = await getTargetTime();
     const now = Date.now();
 
     console.log('[SW] Running check at', new Date().toLocaleTimeString());
-    console.log('[SW] Target time:', targetTime ? new Date(targetTime).toLocaleTimeString() : 'none');
+    console.log('[SW] Target:', targetTime ? new Date(targetTime).toLocaleTimeString() : 'none');
 
     if (targetTime && now >= targetTime) {
         console.log('[SW] Time to notify!');
         await sendBreathingNotification();
-        // Schedule a new random target after notifying
         const newTarget = generateNextTime();
         await saveTargetTime(newTarget);
-        console.log('[SW] New target set for', new Date(newTarget).toLocaleTimeString());
+        console.log('[SW] New target:', new Date(newTarget).toLocaleTimeString());
     }
 
     scheduleNextCheck();
 }
 
-// Generate a random time 70-130 minutes from now
+// *** TEST: Random interval between 1-3 minutes ***
 function generateNextTime() {
-    const mins = Math.floor(Math.random() * 61) + 70; // 70-130
+    const mins = Math.floor(Math.random() * 3) + 1; // 1-3 minutes
+    console.log('[SW] Next notification in', mins, 'minutes');
     return Date.now() + mins * 60 * 1000;
 }
 
 // ─── IndexedDB helpers ────────────────────────────────────────────────────────
-// We use IndexedDB instead of localStorage because SW can't access localStorage
 
 function openDB() {
     return new Promise((resolve, reject) => {
@@ -169,27 +165,16 @@ self.addEventListener('message', async event => {
     console.log('[SW] Message received:', type);
 
     if (type === 'START_SCHEDULING') {
-        // App just enabled notifications - set first target and start checking
         const target = generateNextTime();
         await saveTargetTime(target);
-        console.log('[SW] Scheduling started. First notification at', new Date(target).toLocaleTimeString());
-        
-        // Tell app what the target time is
-        event.source.postMessage({ 
-            type: 'TARGET_TIME_SET', 
-            targetTime: target 
-        });
-        
+        console.log('[SW] First notification at', new Date(target).toLocaleTimeString());
+        event.source.postMessage({ type: 'TARGET_TIME_SET', targetTime: target });
         scheduleNextCheck();
     }
 
     if (type === 'GET_TARGET_TIME') {
-        // App is asking what the current target time is (e.g. after refresh)
         const target = await getTargetTime();
-        event.source.postMessage({ 
-            type: 'TARGET_TIME_SET', 
-            targetTime: target 
-        });
+        event.source.postMessage({ type: 'TARGET_TIME_SET', targetTime: target });
         scheduleNextCheck();
     }
 
