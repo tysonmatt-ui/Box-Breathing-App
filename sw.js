@@ -1,4 +1,4 @@
-const CACHE_NAME = 'breathing-app-v3';
+const CACHE_NAME = 'breathing-app-v4';
 const APP_PATH = '/Box-Breathing-App/';
 const urlsToCache = [
     APP_PATH,
