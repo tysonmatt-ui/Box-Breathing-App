@@ -27,7 +27,7 @@
         .header h1 { font-size:24px; font-weight:bold; color:var(--accent); transition:color 0.3s ease; }
         .header-info { font-size:14px; color:var(--text-secondary); margin-top:8px; }
         .gear-btn { background:none; border:none; cursor:pointer; font-size:22px; padding:4px; color:var(--accent); }
-        .main-content { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
+        .main-content { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; overflow-y:auto; }
         .center-content { text-align:center; width:100%; max-width:500px; }
         .footer { padding:16px; text-align:center; font-size:14px; color:var(--text-tertiary); border-top:1px solid var(--header-border); transition:border-color 0.3s ease, color 0.3s ease; }
         .notification-card { background:var(--accent-bg); border:2px solid var(--accent); border-radius:16px; padding:32px; margin-bottom:24px; }
@@ -160,6 +160,30 @@
         }
 
         /* Onboarding */
+        .screen-header {
+            display:flex;
+            align-items:center;
+            gap:12px;
+            margin-bottom:24px;
+            position:sticky;
+            top:0;
+            background:var(--bg);
+            padding:4px 0 12px;
+            z-index:10;
+        }
+        .screen-header .back-btn {
+            background:none;
+            border:1px solid var(--card-border);
+            color:var(--accent);
+            font-size:18px;
+            cursor:pointer;
+            padding:6px 12px;
+            border-radius:8px;
+            transition:all 0.2s;
+            flex-shrink:0;
+        }
+        .screen-header .back-btn:hover { background:var(--accent-bg); border-color:var(--accent); }
+        .screen-header h2 { color:var(--accent); margin-bottom:0; }
         .ob-icon {
             font-size:72px;
             margin-bottom:16px;
@@ -202,7 +226,7 @@
         <div class="header-content">
             <h1>Mindful Breathing</h1>
             <div style="display:flex;align-items:center;gap:12px">
-                <button id="statsBtn" class="gear-btn" onclick="state.screen='stats';render()" title="Stats">📊</button>
+                <button id="statsBtn" class="gear-btn" onclick="openStats()" title="Stats">📊</button>
                 <button id="gearBtn" class="gear-btn" onclick="openSettings()" title="Settings">⚙️</button>
                 <span id="notificationIcon">🔔</span>
             </div>
@@ -216,7 +240,7 @@
 
     <div class="footer">
         <span id="footerInfo">Active hours: 7:00 AM – 9:30 PM · Calm (4-4-8)</span> &nbsp;·&nbsp;
-        <span onclick="state.screen='about';render()" style="color:var(--accent);cursor:pointer">About</span>
+        <span onclick="openAbout()" style="color:var(--accent);cursor:pointer">About</span>
     </div>
 
     <!-- Firebase SDKs -->
