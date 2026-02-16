@@ -1,3 +1,16 @@
+// ─── Firebase Config ──────────────────────────────────────────────────────────
+
+const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyB0f6mJZ2qiw5ovrZ5X7wbamsyit-zc0is",
+    authDomain: "mindful-breathing-6b0fe.firebaseapp.com",
+    projectId: "mindful-breathing-6b0fe",
+    storageBucket: "mindful-breathing-6b0fe.firebasestorage.app",
+    messagingSenderId: "712095002849",
+    appId: "1:712095002849:web:62fe1f703bebe554b707a0"
+};
+
+const VAPID_KEY = "BFX9KNZJXnKdBYlrCQhscvgCgXj5yYrhOUe9qP45Xx0zAPDBDYJhavbphVG6PDV49YnfDeG40yzGn2u3w7doFPo";
+
 // ─── App State ────────────────────────────────────────────────────────────────
 
 let state = {
@@ -9,6 +22,7 @@ let state = {
     phaseTimer: 0,
     totalTimer: 0,
     nextNotificationTime: null,
+    fcmToken: null,
     screen: 'main',
     settings: {
         startHour: 7,
@@ -55,8 +69,8 @@ const STREAK_MILESTONES = [
 ];
 
 let exerciseInterval = null;
-let notificationCheckInterval = null;
 let swRegistration = null;
+let firebaseMessaging = null;
 
 const appContent   = document.getElementById('appContent');
 const nextReminder = document.getElementById('nextReminder');
@@ -69,15 +83,27 @@ async function init() {
         try {
             swRegistration = await navigator.serviceWorker.register('sw.js');
             await navigator.serviceWorker.ready;
+            navigator.serviceWorker.addEventListener('message', event => {
+                if (event.data.type === 'SHOW_PROMPT') {
+                    state.showNotification = true;
+                    render();
+                }
+            });
         } catch (e) {
             console.log('SW failed:', e);
         }
     }
+
+    try {
+        firebase.initializeApp(FIREBASE_CONFIG);
+        firebaseMessaging = firebase.messaging();
+        console.log('Firebase initialized');
+    } catch (e) {
+        console.log('Firebase init failed:', e);
+    }
+
     loadState();
     recalcStreak();
-    if (state.notificationsEnabled && state.nextNotificationTime) {
-        startNotificationChecks();
-    }
     render();
 }
 
@@ -87,6 +113,7 @@ function saveState() {
     localStorage.setItem('breathingApp', JSON.stringify({
         notificationsEnabled: state.notificationsEnabled,
         nextNotificationTime: state.nextNotificationTime,
+        fcmToken: state.fcmToken,
         settings: state.settings,
         stats: state.stats
     }));
@@ -97,6 +124,7 @@ function loadState() {
         const saved = JSON.parse(localStorage.getItem('breathingApp') || '{}');
         state.notificationsEnabled = saved.notificationsEnabled || false;
         state.nextNotificationTime = saved.nextNotificationTime || null;
+        state.fcmToken = saved.fcmToken || null;
         if (saved.settings) state.settings = { ...state.settings, ...saved.settings };
         if (saved.stats)    state.stats    = { ...state.stats,    ...saved.stats    };
     } catch (e) {
@@ -104,17 +132,103 @@ function loadState() {
     }
 }
 
-// ─── Statistics ───────────────────────────────────────────────────────────────
+// ─── Firebase Messaging ───────────────────────────────────────────────────────
 
-function todayStr() {
-    return new Date().toISOString().split('T')[0];
+async function getFCMToken() {
+    try {
+        const token = await firebaseMessaging.getToken({ vapidKey: VAPID_KEY });
+        if (token) {
+            state.fcmToken = token;
+            saveState();
+            return token;
+        }
+    } catch (e) {
+        console.error('FCM token error:', e);
+    }
+    return null;
 }
 
+async function scheduleFirebaseNotification(delayMinutes) {
+    if (!state.fcmToken) return false;
+    try {
+        const response = await fetch(
+            'https://us-central1-mindful-breathing-6b0fe.cloudfunctions.net/scheduleNotification',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    token: state.fcmToken,
+                    delayMinutes,
+                    title: 'Mindful Breathing',
+                    body: 'Shall we do some autonomic nervous system regulation?',
+                    wakingHoursStart: state.settings.startHour * 60 + state.settings.startMin,
+                    wakingHoursEnd: state.settings.endHour * 60 + state.settings.endMin
+                })
+            }
+        );
+        return response.ok;
+    } catch (e) {
+        console.error('Schedule error:', e);
+        return false;
+    }
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+async function enableNotifications() {
+    if (!('Notification' in window)) { alert('Notifications not supported.'); return; }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+        alert('Notifications were blocked. Please enable them in Chrome settings.');
+        return;
+    }
+
+    const token = await getFCMToken();
+    if (!token) {
+        alert('Could not register for notifications. Please try again.');
+        return;
+    }
+
+    state.notificationsEnabled = true;
+    saveState();
+    await scheduleNextNotification();
+
+    await swRegistration.showNotification('Notifications Enabled!', {
+        body: 'Your first breathing reminder is on its way.',
+        icon: 'icon-192.png',
+        tag: 'test'
+    });
+
+    render();
+}
+
+function disableNotifications() {
+    state.notificationsEnabled = false;
+    state.nextNotificationTime = null;
+    saveState();
+    render();
+}
+
+// ─── Scheduling ───────────────────────────────────────────────────────────────
+
+async function scheduleNextNotification() {
+    const { freqMin, freqMax } = state.settings;
+    const mins = Math.floor(Math.random() * (freqMax - freqMin + 1)) + freqMin;
+    state.nextNotificationTime = Date.now() + mins * 60 * 1000;
+    saveState();
+    await scheduleFirebaseNotification(mins);
+    render();
+}
+
+// ─── Statistics ───────────────────────────────────────────────────────────────
+
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+
 function recordSession() {
-    const today = todayStr();
     state.stats.totalSessions++;
-    state.stats.sessionDates.push(today);
-    state.stats.lastSessionDate = today;
+    state.stats.sessionDates.push(todayStr());
+    state.stats.lastSessionDate = todayStr();
     recalcStreak();
     checkMilestones();
     saveState();
@@ -122,169 +236,59 @@ function recordSession() {
 
 function recalcStreak() {
     const uniqueDates = [...new Set(state.stats.sessionDates)].sort();
-    if (uniqueDates.length === 0) {
-        state.stats.currentStreak = 0;
-        state.stats.longestStreak = 0;
-        return;
-    }
+    if (!uniqueDates.length) { state.stats.currentStreak = 0; state.stats.longestStreak = 0; return; }
 
     const today = todayStr();
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yStr = yesterday.toISOString().split('T')[0];
 
-    // Count current streak backwards from today
-    let streak = 0;
-    let check = today;
+    let streak = 0, check = today;
     while (uniqueDates.includes(check)) {
         streak++;
-        const d = new Date(check);
-        d.setDate(d.getDate() - 1);
+        const d = new Date(check); d.setDate(d.getDate() - 1);
         check = d.toISOString().split('T')[0];
     }
-
-    // If today not done yet, check from yesterday
-    if (streak === 0) {
-        check = yesterdayStr;
+    if (!streak) {
+        check = yStr;
         while (uniqueDates.includes(check)) {
             streak++;
-            const d = new Date(check);
-            d.setDate(d.getDate() - 1);
+            const d = new Date(check); d.setDate(d.getDate() - 1);
             check = d.toISOString().split('T')[0];
         }
     }
-
     state.stats.currentStreak = streak;
 
-    // Calculate longest streak ever
-    let longest = 1, current = 1;
+    let longest = 1, cur = 1;
     for (let i = 1; i < uniqueDates.length; i++) {
-        const prev = new Date(uniqueDates[i - 1]);
-        const curr = new Date(uniqueDates[i]);
-        const diff = (curr - prev) / (1000 * 60 * 60 * 24);
-        if (diff === 1) {
-            current++;
-            longest = Math.max(longest, current);
-        } else {
-            current = 1;
-        }
+        const diff = (new Date(uniqueDates[i]) - new Date(uniqueDates[i-1])) / 86400000;
+        if (diff === 1) { cur++; longest = Math.max(longest, cur); } else cur = 1;
     }
     state.stats.longestStreak = Math.max(longest, streak);
 }
 
 function checkMilestones() {
-    const total  = state.stats.totalSessions;
-    const streak = state.stats.currentStreak;
-
-    const sessionMilestone = SESSION_MILESTONES.find(m => m[0] === total);
-    if (sessionMilestone) { state.celebration = sessionMilestone[1]; return; }
-
-    const streakMilestone = STREAK_MILESTONES.find(m => m[0] === streak);
-    if (streakMilestone) { state.celebration = streakMilestone[1]; return; }
-
+    const sm = SESSION_MILESTONES.find(m => m[0] === state.stats.totalSessions);
+    if (sm) { state.celebration = sm[1]; return; }
+    const stm = STREAK_MILESTONES.find(m => m[0] === state.stats.currentStreak);
+    if (stm) { state.celebration = stm[1]; return; }
     state.celebration = null;
 }
 
-function sessionsToday() {
-    const today = todayStr();
-    return state.stats.sessionDates.filter(d => d === today).length;
-}
-
+function sessionsToday() { return state.stats.sessionDates.filter(d => d === todayStr()).length; }
 function sessionsThisWeek() {
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 6);
-    const weekAgoStr = weekAgo.toISOString().split('T')[0];
-    return state.stats.sessionDates.filter(d => d >= weekAgoStr).length;
+    const w = new Date(); w.setDate(w.getDate() - 6);
+    const wStr = w.toISOString().split('T')[0];
+    return state.stats.sessionDates.filter(d => d >= wStr).length;
 }
 
 // ─── Waking Hours ─────────────────────────────────────────────────────────────
 
 function isWakingHours() {
-    const now   = new Date();
-    const curr  = now.getHours() * 60 + now.getMinutes();
-    const start = state.settings.startHour * 60 + state.settings.startMin;
-    const end   = state.settings.endHour   * 60 + state.settings.endMin;
-    return curr >= start && curr <= end;
-}
-
-// ─── Notifications ────────────────────────────────────────────────────────────
-
-async function sendNotification(title, body, tag) {
-    if (!swRegistration) return false;
-    try {
-        await swRegistration.showNotification(title, {
-            body, tag,
-            icon: 'icon-192.png',
-            badge: 'icon-192.png',
-            requireInteraction: true,
-            vibrate: [200, 100, 200]
-        });
-        return true;
-    } catch (e) {
-        console.error('Notification error:', e);
-        return false;
-    }
-}
-
-async function enableNotifications() {
-    if (!('Notification' in window)) { alert('Notifications not supported.'); return; }
-    if (!swRegistration) { alert('App not ready. Please wait and try again.'); return; }
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-        state.notificationsEnabled = true;
-        saveState();
-        await sendNotification('Notifications Enabled!', 'Your first breathing reminder is on its way.', 'test');
-        scheduleNextNotification();
-        render();
-    } else {
-        alert('Notifications were blocked. Please enable them in Chrome settings.');
-    }
-}
-
-function disableNotifications() {
-    state.notificationsEnabled = false;
-    state.nextNotificationTime = null;
-    if (notificationCheckInterval) {
-        clearInterval(notificationCheckInterval);
-        notificationCheckInterval = null;
-    }
-    saveState();
-    render();
-}
-
-// ─── Scheduling ───────────────────────────────────────────────────────────────
-
-function startNotificationChecks() {
-    if (notificationCheckInterval) clearInterval(notificationCheckInterval);
-    checkIfTimeToNotify();
-    notificationCheckInterval = setInterval(checkIfTimeToNotify, 2 * 60 * 1000);
-}
-
-async function checkIfTimeToNotify() {
-    if (!state.nextNotificationTime) return;
-    if (Date.now() >= state.nextNotificationTime) {
-        state.nextNotificationTime = null;
-        saveState();
-        if (isWakingHours()) {
-            state.showNotification = true;
-            await sendNotification(
-                'Mindful Breathing',
-                'Shall we do some autonomic nervous system regulation?',
-                'breathing-reminder'
-            );
-            render();
-        }
-        scheduleNextNotification();
-    }
-}
-
-function scheduleNextNotification() {
-    const { freqMin, freqMax } = state.settings;
-    const mins = Math.floor(Math.random() * (freqMax - freqMin + 1)) + freqMin;
-    state.nextNotificationTime = Date.now() + mins * 60 * 1000;
-    saveState();
-    startNotificationChecks();
-    render();
+    const now  = new Date();
+    const curr = now.getHours() * 60 + now.getMinutes();
+    return curr >= (state.settings.startHour * 60 + state.settings.startMin) &&
+           curr <= (state.settings.endHour   * 60 + state.settings.endMin);
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -294,14 +298,11 @@ function saveSettings() {
     const startMin  = parseInt(document.getElementById('startMin').value);
     const endHour   = parseInt(document.getElementById('endHour').value);
     const endMin    = parseInt(document.getElementById('endMin').value);
-    const freqIdx   = parseInt(document.getElementById('freqSlider').value);
-    const preset    = FREQ_PRESETS[freqIdx];
+    const preset    = FREQ_PRESETS[parseInt(document.getElementById('freqSlider').value)];
 
     if ((endHour * 60 + endMin) <= (startHour * 60 + startMin)) {
-        alert('End time must be after start time.');
-        return;
+        alert('End time must be after start time.'); return;
     }
-
     state.settings = { startHour, startMin, endHour, endMin, freqMin: preset[0], freqMax: preset[1] };
     saveState();
     if (state.notificationsEnabled) scheduleNextNotification();
@@ -310,8 +311,7 @@ function saveSettings() {
 }
 
 function getCurrentFreqIndex() {
-    const { freqMin, freqMax } = state.settings;
-    const idx = FREQ_PRESETS.findIndex(p => p[0] === freqMin && p[1] === freqMax);
+    const idx = FREQ_PRESETS.findIndex(p => p[0] === state.settings.freqMin && p[1] === state.settings.freqMax);
     return idx >= 0 ? idx : 2;
 }
 
@@ -326,40 +326,31 @@ function padTime(n) { return n.toString().padStart(2, '0'); }
 function startExercise() {
     state.showNotification = false;
     state.isExercising = true;
-    state.cycle = 1;
-    state.phase = 'inhale';
-    state.phaseTimer = 0;
-    state.totalTimer = 0;
+    state.cycle = 1; state.phase = 'inhale';
+    state.phaseTimer = 0; state.totalTimer = 0;
     render();
 
     let totalTime = 0, phaseTime = 0;
     let currentPhase = 'inhale', currentCycle = 1;
 
     exerciseInterval = setInterval(() => {
-        totalTime += 0.1;
-        phaseTime += 0.1;
-        state.totalTimer = totalTime;
-        state.phaseTimer = phaseTime;
+        totalTime += 0.1; phaseTime += 0.1;
+        state.totalTimer = totalTime; state.phaseTimer = phaseTime;
 
         if (currentPhase === 'inhale' && phaseTime >= 4) {
-            currentPhase = 'hold';   phaseTime = 0;
-            state.phase = 'hold';    state.phaseTimer = 0;
+            currentPhase = 'hold'; phaseTime = 0; state.phase = 'hold'; state.phaseTimer = 0;
         } else if (currentPhase === 'hold' && phaseTime >= 4) {
-            currentPhase = 'exhale'; phaseTime = 0;
-            state.phase = 'exhale';  state.phaseTimer = 0;
+            currentPhase = 'exhale'; phaseTime = 0; state.phase = 'exhale'; state.phaseTimer = 0;
         } else if (currentPhase === 'exhale' && phaseTime >= 8) {
             if (currentCycle < 4) {
-                currentCycle++;
-                currentPhase = 'inhale'; phaseTime = 0;
-                state.cycle = currentCycle;
-                state.phase = 'inhale';  state.phaseTimer = 0;
+                currentCycle++; currentPhase = 'inhale'; phaseTime = 0;
+                state.cycle = currentCycle; state.phase = 'inhale'; state.phaseTimer = 0;
             } else {
                 clearInterval(exerciseInterval);
                 state.isExercising = false;
                 recordSession();
                 scheduleNextNotification();
-                render();
-                return;
+                render(); return;
             }
         }
         render();
@@ -368,19 +359,11 @@ function startExercise() {
 
 function stopExercise() {
     if (exerciseInterval) clearInterval(exerciseInterval);
-    state.isExercising = false;
-    render();
+    state.isExercising = false; render();
 }
 
-function dismissNotification() {
-    state.showNotification = false;
-    render();
-}
-
-function dismissCelebration() {
-    state.celebration = null;
-    render();
-}
+function dismissNotification() { state.showNotification = false; render(); }
+function dismissCelebration()  { state.celebration = null; render(); }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -391,21 +374,21 @@ function getCircleScale() {
 }
 
 function formatTime(secs) {
-    return `${Math.floor(secs / 60)}:${Math.floor(secs % 60).toString().padStart(2, '0')}`;
+    return `${Math.floor(secs/60)}:${Math.floor(secs%60).toString().padStart(2,'0')}`;
 }
 
 function getNextReminderText() {
     if (!state.nextNotificationTime) return '';
     const secs = Math.floor((state.nextNotificationTime - Date.now()) / 1000);
-    if (secs < 0)  return 'Any moment now...';
+    if (secs < 0) return 'Any moment now...';
     if (secs < 60) return `${secs} seconds`;
-    return `~${Math.floor(secs / 60)} minutes`;
+    return `~${Math.floor(secs/60)} minutes`;
 }
 
 function fmtHour(h, m) {
-    const period = h >= 12 ? 'PM' : 'AM';
+    const p = h >= 12 ? 'PM' : 'AM';
     const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return `${h12}:${padTime(m)} ${period}`;
+    return `${h12}:${padTime(m)} ${p}`;
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -416,10 +399,10 @@ function render() {
         ? `Next reminder in ${getNextReminderText()}` : '';
 
     const hide = state.isExercising;
-    const gearBtn  = document.getElementById('gearBtn');
-    const statsBtn = document.getElementById('statsBtn');
-    if (gearBtn)  gearBtn.style.display  = hide ? 'none' : 'block';
-    if (statsBtn) statsBtn.style.display = hide ? 'none' : 'block';
+    ['gearBtn','statsBtn'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = hide ? 'none' : 'block';
+    });
 
     if (state.screen === 'settings') { renderSettings(); return; }
     if (state.screen === 'about')    { renderAbout();    return; }
@@ -437,10 +420,9 @@ function renderMain() {
             </div>`;
         return;
     }
-
     if (state.isExercising) {
-        const labels   = { inhale: 'Breathe In', hold: 'Hold', exhale: 'Breathe Out' };
-        const maxTimes = { inhale: 4, hold: 4, exhale: 8 };
+        const labels   = { inhale:'Breathe In', hold:'Hold', exhale:'Breathe Out' };
+        const maxTimes = { inhale:4, hold:4, exhale:8 };
         const countdown = Math.ceil(maxTimes[state.phase] - state.phaseTimer);
         appContent.innerHTML = `
             <div class="breathing-circle-container">
@@ -457,7 +439,6 @@ function renderMain() {
             <button class="btn btn-secondary" onclick="stopExercise()">Stop Exercise</button>`;
         return;
     }
-
     if (state.showNotification) {
         appContent.innerHTML = `
             <div class="notification-card">
@@ -470,7 +451,6 @@ function renderMain() {
             </div>`;
         return;
     }
-
     if (!state.notificationsEnabled) {
         appContent.innerHTML = `
             <div class="idle-icon">🔔</div>
@@ -479,16 +459,13 @@ function renderMain() {
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>`;
         return;
     }
-
     const { startHour, startMin, endHour, endMin } = state.settings;
-    const freqIdx = getCurrentFreqIndex();
-    const streak  = state.stats.currentStreak;
-
+    const streak = state.stats.currentStreak;
     appContent.innerHTML = `
         <div class="idle-icon">🔔</div>
         <h2>All Set!</h2>
-        <p>Reminders active between ${fmtHour(startHour, startMin)} and ${fmtHour(endHour, endMin)}.</p>
-        <p style="font-size:13px;color:#ca8a04;margin-top:-12px">${FREQ_PRESETS[freqIdx][2]}</p>
+        <p>Reminders active between ${fmtHour(startHour,startMin)} and ${fmtHour(endHour,endMin)}.</p>
+        <p style="font-size:13px;color:#ca8a04;margin-top:-12px">${FREQ_PRESETS[getCurrentFreqIndex()][2]}</p>
         ${streak > 0 ? `<p style="font-size:14px;color:#ca8a04;margin-top:-8px">🔥 ${streak} day streak!</p>` : ''}
         <button class="btn btn-primary" onclick="startExercise()" style="margin-top:8px">▶ Start Practice Now</button>
         <button class="btn btn-secondary" style="margin-top:12px" onclick="disableNotifications()">Turn Off Reminders</button>`;
@@ -496,83 +473,45 @@ function renderMain() {
 
 function renderStats() {
     const { totalSessions, currentStreak, longestStreak } = state.stats;
-    const today = sessionsToday();
-    const week  = sessionsThisWeek();
-
     const days = [];
     for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const str  = d.toISOString().split('T')[0];
-        const done = state.stats.sessionDates.includes(str);
-        const lbl  = d.toLocaleDateString('en', { weekday: 'short' }).charAt(0);
-        days.push({ lbl, done });
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const str = d.toISOString().split('T')[0];
+        days.push({ lbl: d.toLocaleDateString('en',{weekday:'short'}).charAt(0), done: state.stats.sessionDates.includes(str) });
     }
-
     const calHtml = days.map(d => `
         <div class="cal-day">
-            <div class="cal-dot ${d.done ? 'cal-dot-done' : ''}"></div>
+            <div class="cal-dot ${d.done?'cal-dot-done':''}"></div>
             <div class="cal-label">${d.lbl}</div>
         </div>`).join('');
-
-    const nextSM = SESSION_MILESTONES.find(m => m[0] > totalSessions);
+    const nextSM   = SESSION_MILESTONES.find(m => m[0] > totalSessions);
     const nextStrM = STREAK_MILESTONES.find(m => m[0] > currentStreak);
 
     appContent.innerHTML = `
         <div style="width:100%;max-width:500px;text-align:left">
             <h2 style="color:#ca8a04;margin-bottom:24px">Your Stats</h2>
-
             <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value">${totalSessions}</div>
-                    <div class="stat-label">Total Sessions</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${today}</div>
-                    <div class="stat-label">Today</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${week}</div>
-                    <div class="stat-label">This Week</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">🔥 ${currentStreak}</div>
-                    <div class="stat-label">Current Streak</div>
-                </div>
-                <div class="stat-card" style="grid-column:span 2">
-                    <div class="stat-value">⭐ ${longestStreak}</div>
-                    <div class="stat-label">Longest Streak Ever</div>
-                </div>
+                <div class="stat-card"><div class="stat-value">${totalSessions}</div><div class="stat-label">Total Sessions</div></div>
+                <div class="stat-card"><div class="stat-value">${sessionsToday()}</div><div class="stat-label">Today</div></div>
+                <div class="stat-card"><div class="stat-value">${sessionsThisWeek()}</div><div class="stat-label">This Week</div></div>
+                <div class="stat-card"><div class="stat-value">🔥 ${currentStreak}</div><div class="stat-label">Current Streak</div></div>
+                <div class="stat-card" style="grid-column:span 2"><div class="stat-value">⭐ ${longestStreak}</div><div class="stat-label">Longest Streak Ever</div></div>
             </div>
-
             <h3 style="color:#ca8a04;margin:24px 0 12px">Last 7 Days</h3>
             <div class="calendar-row">${calHtml}</div>
-
             ${nextSM ? `
             <h3 style="color:#ca8a04;margin:24px 0 8px">Next Milestones</h3>
             <div class="milestone-bar-wrap">
-                <div class="milestone-label">
-                    <span>${totalSessions} sessions</span>
-                    <span>${nextSM[0]} sessions</span>
-                </div>
-                <div class="milestone-bar">
-                    <div class="milestone-fill" style="width:${Math.min(100,(totalSessions/nextSM[0])*100)}%"></div>
-                </div>
+                <div class="milestone-label"><span>${totalSessions} sessions</span><span>${nextSM[0]} sessions</span></div>
+                <div class="milestone-bar"><div class="milestone-fill" style="width:${Math.min(100,(totalSessions/nextSM[0])*100)}%"></div></div>
                 <p style="font-size:12px;color:#6b7280;margin-top:4px">${nextSM[0]-totalSessions} sessions until next milestone</p>
             </div>` : '<p style="color:#ca8a04;margin-top:24px">🏆 All session milestones reached!</p>'}
-
             ${nextStrM ? `
             <div class="milestone-bar-wrap" style="margin-top:16px">
-                <div class="milestone-label">
-                    <span>🔥 ${currentStreak} days</span>
-                    <span>${nextStrM[0]} days</span>
-                </div>
-                <div class="milestone-bar">
-                    <div class="milestone-fill" style="width:${Math.min(100,(currentStreak/nextStrM[0])*100)}%"></div>
-                </div>
+                <div class="milestone-label"><span>🔥 ${currentStreak} days</span><span>${nextStrM[0]} days</span></div>
+                <div class="milestone-bar"><div class="milestone-fill" style="width:${Math.min(100,(currentStreak/nextStrM[0])*100)}%"></div></div>
                 <p style="font-size:12px;color:#6b7280;margin-top:4px">${nextStrM[0]-currentStreak} more days to next streak milestone</p>
             </div>` : ''}
-
             <button class="btn btn-secondary" style="margin-top:32px" onclick="state.screen='main';render()">← Back</button>
         </div>`;
 }
@@ -584,7 +523,6 @@ function renderSettings() {
         `<option value="${i}" ${i===sel?'selected':''}>${padTime(i)}</option>`).join('');
     const minOpts = (sel) => [0,15,30,45].map(m =>
         `<option value="${m}" ${m===sel?'selected':''}>${padTime(m)}</option>`).join('');
-
     appContent.innerHTML = `
         <div style="width:100%;max-width:500px">
             <h2 style="color:#ca8a04;margin-bottom:24px">Settings</h2>
@@ -639,7 +577,5 @@ function renderAbout() {
         </div>`;
 }
 
-// Update countdown every 5 seconds
 setInterval(() => { if (!state.isExercising) render(); }, 5000);
-
 init();
