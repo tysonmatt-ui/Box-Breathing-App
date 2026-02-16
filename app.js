@@ -497,16 +497,20 @@ async function init() {
         }
 
         try {
-            firebase.initializeApp(FIREBASE_CONFIG);
-            fcmSWRegistration = await navigator.serviceWorker.register(
-                '/Box-Breathing-App/firebase-messaging-sw.js',
-                { scope: '/Box-Breathing-App/' }
-            );
-            await fcmSWRegistration.update();
-            firebaseMessaging = firebase.messaging();
-            console.log('Firebase initialized successfully');
+            if (typeof firebase !== 'undefined') {
+                firebase.initializeApp(FIREBASE_CONFIG);
+                fcmSWRegistration = await navigator.serviceWorker.register(
+                    '/Box-Breathing-App/firebase-messaging-sw.js',
+                    { scope: '/Box-Breathing-App/' }
+                );
+                await fcmSWRegistration.update();
+                firebaseMessaging = firebase.messaging();
+                console.log('Firebase initialized successfully');
+            } else {
+                console.warn('Firebase SDK not loaded - notification features unavailable');
+            }
         } catch (e) {
-            console.log('Firebase init failed:', e);
+            console.error('Firebase init failed:', e);
         }
     }
 
@@ -551,6 +555,10 @@ function loadState() {
 // ─── Firebase Messaging ───────────────────────────────────────────────────────
 
 async function getFCMToken() {
+    if (!firebaseMessaging) {
+        console.error('Firebase messaging not initialized');
+        return null;
+    }
     try {
         var token = await firebaseMessaging.getToken({
             vapidKey: VAPID_KEY,
@@ -603,6 +611,30 @@ async function enableNotifications() {
         return;
     }
 
+    // Ensure Firebase is initialized (retry if init failed earlier)
+    if (!firebaseMessaging) {
+        try {
+            if (typeof firebase === 'undefined') {
+                alert('Notification service could not load. Please check your connection and refresh.');
+                return;
+            }
+            if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+            if (!fcmSWRegistration) {
+                fcmSWRegistration = await navigator.serviceWorker.register(
+                    '/Box-Breathing-App/firebase-messaging-sw.js',
+                    { scope: '/Box-Breathing-App/' }
+                );
+            }
+            await fcmSWRegistration.update();
+            firebaseMessaging = firebase.messaging();
+            console.log('Firebase re-initialized successfully');
+        } catch (e) {
+            console.error('Firebase init retry failed:', e);
+            alert('Could not initialize notification service. Please refresh the page and try again.');
+            return;
+        }
+    }
+
     var token = await getFCMToken();
     if (!token) {
         alert('Could not register for notifications. Please try again.');
@@ -613,11 +645,18 @@ async function enableNotifications() {
     saveState();
     await scheduleNextNotification();
 
-    await swRegistration.showNotification('Notifications Enabled!', {
-        body: 'Your first breathing reminder is on its way.',
-        icon: 'icon-192.png',
-        tag: 'test'
-    });
+    try {
+        var sw = swRegistration || fcmSWRegistration;
+        if (sw) {
+            await sw.showNotification('Notifications Enabled!', {
+                body: 'Your first breathing reminder is on its way.',
+                icon: 'icon-192.png',
+                tag: 'test'
+            });
+        }
+    } catch (e) {
+        console.log('Confirmation notification failed:', e);
+    }
 
     render();
 }
@@ -878,8 +917,14 @@ async function finishOnboarding() {
     state.demoRunning = false;
     state.demoComplete = false;
 
-    await enableNotifications();
     render();
+
+    // Try to enable notifications (don't block onboarding completion)
+    try {
+        await enableNotifications();
+    } catch (e) {
+        console.log('Notification setup deferred:', e);
+    }
 }
 
 // ─── Breathing Exercise ───────────────────────────────────────────────────────
