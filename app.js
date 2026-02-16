@@ -70,6 +70,7 @@ const STREAK_MILESTONES = [
 
 let exerciseInterval = null;
 let swRegistration = null;
+let fcmSWRegistration = null;   // FIX: separate variable for the FCM service worker
 let firebaseMessaging = null;
 
 const appContent   = document.getElementById('appContent');
@@ -80,8 +81,9 @@ const notificationIcon = document.getElementById('notificationIcon');
 
 async function init() {
     if ('serviceWorker' in navigator) {
+        // Register the main app service worker (sw.js) for caching/offline
         try {
-            swRegistration = await navigator.serviceWorker.register('sw.js');
+            swRegistration = await navigator.serviceWorker.register('/Box-Breathing-App/sw.js');
             await navigator.serviceWorker.ready;
             navigator.serviceWorker.addEventListener('message', event => {
                 if (event.data.type === 'SHOW_PROMPT') {
@@ -92,19 +94,22 @@ async function init() {
         } catch (e) {
             console.log('SW failed:', e);
         }
-    }
 
-    try {
-        firebase.initializeApp(FIREBASE_CONFIG);
-        const fcmSWReg = await navigator.serviceWorker.register(
-            '/Box-Breathing-App/firebase-messaging-sw.js',
-            { scope: '/Box-Breathing-App/' }
-        );
-        firebaseMessaging = firebase.messaging();
-        firebaseMessaging.useServiceWorker(fcmSWReg);
-        console.log('Firebase initialized');
-    } catch (e) {
-        console.log('Firebase init failed:', e);
+        // FIX: Register the Firebase messaging service worker separately,
+        // and pass it directly to getToken() instead of using the removed
+        // useServiceWorker() method which no longer exists in Firebase 10.
+        try {
+            firebase.initializeApp(FIREBASE_CONFIG);
+            fcmSWRegistration = await navigator.serviceWorker.register(
+                '/Box-Breathing-App/firebase-messaging-sw.js',
+                { scope: '/Box-Breathing-App/' }
+            );
+            await fcmSWRegistration.update();
+            firebaseMessaging = firebase.messaging();
+            console.log('Firebase initialized successfully');
+        } catch (e) {
+            console.log('Firebase init failed:', e);
+        }
     }
 
     loadState();
@@ -141,7 +146,12 @@ function loadState() {
 
 async function getFCMToken() {
     try {
-        const token = await firebaseMessaging.getToken({ vapidKey: VAPID_KEY });
+        // FIX: Pass the fcmSWRegistration directly to getToken() so Firebase
+        // knows which service worker to use, regardless of the app's subfolder path.
+        const token = await firebaseMessaging.getToken({
+            vapidKey: VAPID_KEY,
+            serviceWorkerRegistration: fcmSWRegistration
+        });
         if (token) {
             state.fcmToken = token;
             saveState();
