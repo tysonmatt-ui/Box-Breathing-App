@@ -96,7 +96,12 @@ async function init() {
 
     try {
         firebase.initializeApp(FIREBASE_CONFIG);
+        const fcmSWReg = await navigator.serviceWorker.register(
+            '/Box-Breathing-App/firebase-messaging-sw.js',
+            { scope: '/Box-Breathing-App/' }
+        );
         firebaseMessaging = firebase.messaging();
+        firebaseMessaging.useServiceWorker(fcmSWReg);
         console.log('Firebase initialized');
     } catch (e) {
         console.log('Firebase init failed:', e);
