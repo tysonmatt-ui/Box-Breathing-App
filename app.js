@@ -11,16 +11,87 @@ const FIREBASE_CONFIG = {
 
 const VAPID_KEY = "BFX9KNZJXnKdBYlrCQhscvgCgXj5yYrhOUe9qP45Xx0zAPDBDYJhavbphVG6PDV49YnfDeG40yzGn2u3w7doFPo";
 
+// ─── Breathing Patterns ───────────────────────────────────────────────────────
+
+const BREATHING_PATTERNS = [
+    {
+        id: 'calm',
+        name: 'Calm',
+        shortName: '4-4-8',
+        description: 'Extended exhale for deep relaxation',
+        phases: [
+            { name: 'Breathe In',  duration: 4, type: 'inhale' },
+            { name: 'Hold',        duration: 4, type: 'hold-full' },
+            { name: 'Breathe Out', duration: 8, type: 'exhale' }
+        ]
+    },
+    {
+        id: 'box',
+        name: 'Classic Box',
+        shortName: '4-4-4-4',
+        description: 'Equal phases for balance and focus',
+        phases: [
+            { name: 'Breathe In',  duration: 4, type: 'inhale' },
+            { name: 'Hold',        duration: 4, type: 'hold-full' },
+            { name: 'Breathe Out', duration: 4, type: 'exhale' },
+            { name: 'Hold',        duration: 4, type: 'hold-empty' }
+        ]
+    },
+    {
+        id: 'relaxing',
+        name: 'Relaxing',
+        shortName: '4-7-8',
+        description: 'Dr. Weil\'s technique for calm and sleep',
+        phases: [
+            { name: 'Breathe In',  duration: 4, type: 'inhale' },
+            { name: 'Hold',        duration: 7, type: 'hold-full' },
+            { name: 'Breathe Out', duration: 8, type: 'exhale' }
+        ]
+    },
+    {
+        id: 'energizing',
+        name: 'Energizing',
+        shortName: '6-6',
+        description: 'Rhythmic breathing for energy and alertness',
+        phases: [
+            { name: 'Breathe In',  duration: 6, type: 'inhale' },
+            { name: 'Breathe Out', duration: 6, type: 'exhale' }
+        ]
+    },
+    {
+        id: 'extended',
+        name: 'Extended Calm',
+        shortName: '5-5-10',
+        description: 'Longer pattern for deep relaxation',
+        phases: [
+            { name: 'Breathe In',  duration: 5, type: 'inhale' },
+            { name: 'Hold',        duration: 5, type: 'hold-full' },
+            { name: 'Breathe Out', duration: 10, type: 'exhale' }
+        ]
+    }
+];
+
+// ─── Session Lengths ──────────────────────────────────────────────────────────
+
+const SESSION_LENGTHS = [
+    { id: 'quick',    name: 'Quick',    cycles: 2 },
+    { id: 'standard', name: 'Standard', cycles: 4 },
+    { id: 'extended', name: 'Extended', cycles: 6 },
+    { id: 'deep',     name: 'Deep',     cycles: 8 }
+];
+
 // ─── App State ────────────────────────────────────────────────────────────────
 
 let state = {
     notificationsEnabled: false,
     isExercising: false,
     showNotification: false,
-    phase: 'inhale',
+    activePhase: null,
     cycle: 1,
+    totalCycles: 4,
     phaseTimer: 0,
     totalTimer: 0,
+    totalDuration: 0,
     nextNotificationTime: null,
     fcmToken: null,
     screen: 'main',
@@ -30,7 +101,9 @@ let state = {
         endHour: 21,
         endMin: 30,
         freqMin: 70,
-        freqMax: 130
+        freqMax: 130,
+        patternId: 'calm',
+        sessionLengthId: 'standard'
     },
     stats: {
         totalSessions: 0,
@@ -41,6 +114,10 @@ let state = {
     },
     celebration: null
 };
+
+// Temporary settings selections (used while editing settings)
+let settingsPatternId = 'calm';
+let settingsLengthId = 'standard';
 
 const FREQ_PRESETS = [
     [30,  60,  'Every ~45 mins'],
@@ -70,18 +147,51 @@ const STREAK_MILESTONES = [
 
 let exerciseInterval = null;
 let swRegistration = null;
-let fcmSWRegistration = null;   // FIX: separate variable for the FCM service worker
+let fcmSWRegistration = null;
 let firebaseMessaging = null;
 
 const appContent   = document.getElementById('appContent');
 const nextReminder = document.getElementById('nextReminder');
 const notificationIcon = document.getElementById('notificationIcon');
 
+// ─── Pattern / Length Helpers ─────────────────────────────────────────────────
+
+function getPattern(id) {
+    return BREATHING_PATTERNS.find(p => p.id === id) || BREATHING_PATTERNS[0];
+}
+
+function getSessionLength(id) {
+    return SESSION_LENGTHS.find(s => s.id === id) || SESSION_LENGTHS[1];
+}
+
+function getSelectedPattern() {
+    return getPattern(state.settings.patternId);
+}
+
+function getSelectedSessionLength() {
+    return getSessionLength(state.settings.sessionLengthId);
+}
+
+function calcCycleDuration(pattern) {
+    return pattern.phases.reduce((sum, p) => sum + p.duration, 0);
+}
+
+function calcTotalDuration(pattern, sessionLength) {
+    return calcCycleDuration(pattern) * sessionLength.cycles;
+}
+
+function formatDuration(totalSecs) {
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    if (m === 0) return `${s}s`;
+    if (s === 0) return `${m}m`;
+    return `${m}m ${s}s`;
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
     if ('serviceWorker' in navigator) {
-        // Register the main app service worker (sw.js) for caching/offline
         try {
             swRegistration = await navigator.serviceWorker.register('/Box-Breathing-App/sw.js');
             await navigator.serviceWorker.ready;
@@ -95,9 +205,6 @@ async function init() {
             console.log('SW failed:', e);
         }
 
-        // FIX: Register the Firebase messaging service worker separately,
-        // and pass it directly to getToken() instead of using the removed
-        // useServiceWorker() method which no longer exists in Firebase 10.
         try {
             firebase.initializeApp(FIREBASE_CONFIG);
             fcmSWRegistration = await navigator.serviceWorker.register(
@@ -146,8 +253,6 @@ function loadState() {
 
 async function getFCMToken() {
     try {
-        // FIX: Pass the fcmSWRegistration directly to getToken() so Firebase
-        // knows which service worker to use, regardless of the app's subfolder path.
         const token = await firebaseMessaging.getToken({
             vapidKey: VAPID_KEY,
             serviceWorkerRegistration: fcmSWRegistration
@@ -308,6 +413,23 @@ function isWakingHours() {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
+function openSettings() {
+    settingsPatternId = state.settings.patternId;
+    settingsLengthId  = state.settings.sessionLengthId;
+    state.screen = 'settings';
+    render();
+}
+
+function selectPattern(id) {
+    settingsPatternId = id;
+    render();
+}
+
+function selectLength(id) {
+    settingsLengthId = id;
+    render();
+}
+
 function saveSettings() {
     const startHour = parseInt(document.getElementById('startHour').value);
     const startMin  = parseInt(document.getElementById('startMin').value);
@@ -318,7 +440,12 @@ function saveSettings() {
     if ((endHour * 60 + endMin) <= (startHour * 60 + startMin)) {
         alert('End time must be after start time.'); return;
     }
-    state.settings = { startHour, startMin, endHour, endMin, freqMin: preset[0], freqMax: preset[1] };
+    state.settings = {
+        startHour, startMin, endHour, endMin,
+        freqMin: preset[0], freqMax: preset[1],
+        patternId: settingsPatternId,
+        sessionLengthId: settingsLengthId
+    };
     saveState();
     if (state.notificationsEnabled) scheduleNextNotification();
     state.screen = 'main';
@@ -339,33 +466,52 @@ function padTime(n) { return n.toString().padStart(2, '0'); }
 // ─── Breathing Exercise ───────────────────────────────────────────────────────
 
 function startExercise() {
+    const pattern = getSelectedPattern();
+    const sessionLength = getSelectedSessionLength();
+
     state.showNotification = false;
     state.isExercising = true;
-    state.cycle = 1; state.phase = 'inhale';
-    state.phaseTimer = 0; state.totalTimer = 0;
+    state.cycle = 1;
+    state.totalCycles = sessionLength.cycles;
+    state.activePhase = pattern.phases[0];
+    state.phaseTimer = 0;
+    state.totalTimer = 0;
+    state.totalDuration = calcTotalDuration(pattern, sessionLength);
     render();
 
     let totalTime = 0, phaseTime = 0;
-    let currentPhase = 'inhale', currentCycle = 1;
+    let currentPhaseIndex = 0, currentCycle = 1;
 
     exerciseInterval = setInterval(() => {
         totalTime += 0.1; phaseTime += 0.1;
         state.totalTimer = totalTime; state.phaseTimer = phaseTime;
 
-        if (currentPhase === 'inhale' && phaseTime >= 4) {
-            currentPhase = 'hold'; phaseTime = 0; state.phase = 'hold'; state.phaseTimer = 0;
-        } else if (currentPhase === 'hold' && phaseTime >= 4) {
-            currentPhase = 'exhale'; phaseTime = 0; state.phase = 'exhale'; state.phaseTimer = 0;
-        } else if (currentPhase === 'exhale' && phaseTime >= 8) {
-            if (currentCycle < 4) {
-                currentCycle++; currentPhase = 'inhale'; phaseTime = 0;
-                state.cycle = currentCycle; state.phase = 'inhale'; state.phaseTimer = 0;
+        const currentPhase = pattern.phases[currentPhaseIndex];
+
+        if (phaseTime >= currentPhase.duration) {
+            currentPhaseIndex++;
+            if (currentPhaseIndex >= pattern.phases.length) {
+                // Cycle complete
+                if (currentCycle < sessionLength.cycles) {
+                    currentCycle++;
+                    currentPhaseIndex = 0;
+                    phaseTime = 0;
+                    state.cycle = currentCycle;
+                    state.activePhase = pattern.phases[0];
+                    state.phaseTimer = 0;
+                } else {
+                    // Exercise complete
+                    clearInterval(exerciseInterval);
+                    state.isExercising = false;
+                    recordSession();
+                    scheduleNextNotification();
+                    render();
+                    return;
+                }
             } else {
-                clearInterval(exerciseInterval);
-                state.isExercising = false;
-                recordSession();
-                scheduleNextNotification();
-                render(); return;
+                phaseTime = 0;
+                state.activePhase = pattern.phases[currentPhaseIndex];
+                state.phaseTimer = 0;
             }
         }
         render();
@@ -383,9 +529,13 @@ function dismissCelebration()  { state.celebration = null; render(); }
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getCircleScale() {
-    if (state.phase === 'inhale') return 0.5 + (state.phaseTimer / 4) * 0.5;
-    if (state.phase === 'hold')   return 1;
-    return 1 - (state.phaseTimer / 8) * 0.5;
+    if (!state.activePhase) return 0.75;
+    const phase = state.activePhase;
+    if (phase.type === 'inhale')     return 0.5 + (state.phaseTimer / phase.duration) * 0.5;
+    if (phase.type === 'hold-full')  return 1;
+    if (phase.type === 'exhale')     return 1 - (state.phaseTimer / phase.duration) * 0.5;
+    if (phase.type === 'hold-empty') return 0.5;
+    return 0.75;
 }
 
 function formatTime(secs) {
@@ -419,6 +569,14 @@ function render() {
         if (el) el.style.display = hide ? 'none' : 'block';
     });
 
+    // Update footer with current settings
+    const footerEl = document.getElementById('footerInfo');
+    if (footerEl) {
+        const { startHour, startMin, endHour, endMin } = state.settings;
+        const pattern = getSelectedPattern();
+        footerEl.innerHTML = `Active hours: ${fmtHour(startHour,startMin)} – ${fmtHour(endHour,endMin)} &nbsp;·&nbsp; ${pattern.name} (${pattern.shortName})`;
+    }
+
     if (state.screen === 'settings') { renderSettings(); return; }
     if (state.screen === 'about')    { renderAbout();    return; }
     if (state.screen === 'stats')    { renderStats();    return; }
@@ -436,20 +594,21 @@ function renderMain() {
         return;
     }
     if (state.isExercising) {
-        const labels   = { inhale:'Breathe In', hold:'Hold', exhale:'Breathe Out' };
-        const maxTimes = { inhale:4, hold:4, exhale:8 };
-        const countdown = Math.ceil(maxTimes[state.phase] - state.phaseTimer);
+        const phase = state.activePhase;
+        const countdown = Math.ceil(phase.duration - state.phaseTimer);
+        const pattern = getSelectedPattern();
         appContent.innerHTML = `
             <div class="breathing-circle-container">
                 <div class="breathing-circle" style="transform:scale(${getCircleScale()})"></div>
                 <div class="breathing-text">
-                    <div class="phase-label">${labels[state.phase]}</div>
+                    <div class="phase-label">${phase.name}</div>
                     <div class="phase-countdown">${countdown}</div>
                 </div>
             </div>
             <div class="progress-info">
-                <div class="cycle-info">Cycle ${state.cycle} of 4</div>
-                <div class="time-info">${formatTime(state.totalTimer)} / 1:04</div>
+                <div class="cycle-info">Cycle ${state.cycle} of ${state.totalCycles}</div>
+                <div class="time-info">${formatTime(state.totalTimer)} / ${formatTime(state.totalDuration)}</div>
+                <div style="font-size:12px;color:#6b7280;margin-top:4px">${pattern.name} (${pattern.shortName})</div>
             </div>
             <button class="btn btn-secondary" onclick="stopExercise()">Stop Exercise</button>`;
         return;
@@ -474,14 +633,23 @@ function renderMain() {
             <button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>`;
         return;
     }
+
     const { startHour, startMin, endHour, endMin } = state.settings;
     const streak = state.stats.currentStreak;
+    const pattern = getSelectedPattern();
+    const sessionLength = getSelectedSessionLength();
+    const totalSecs = calcTotalDuration(pattern, sessionLength);
+
     appContent.innerHTML = `
         <div class="idle-icon">🔔</div>
         <h2>All Set!</h2>
         <p>Reminders active between ${fmtHour(startHour,startMin)} and ${fmtHour(endHour,endMin)}.</p>
         <p style="font-size:13px;color:#ca8a04;margin-top:-12px">${FREQ_PRESETS[getCurrentFreqIndex()][2]}</p>
-        ${streak > 0 ? `<p style="font-size:14px;color:#ca8a04;margin-top:-8px">🔥 ${streak} day streak!</p>` : ''}
+        <div class="current-program" style="margin:-8px auto 12px;max-width:280px;background:rgba(202,138,4,0.08);border:1px solid rgba(202,138,4,0.2);border-radius:12px;padding:12px 16px;text-align:center">
+            <div style="font-size:14px;color:#9ca3af;margin-bottom:4px">${pattern.name} (${pattern.shortName})</div>
+            <div style="font-size:13px;color:#6b7280">${sessionLength.name} · ${sessionLength.cycles} cycles · ${formatDuration(totalSecs)}</div>
+        </div>
+        ${streak > 0 ? `<p style="font-size:14px;color:#ca8a04;margin-top:0">🔥 ${streak} day streak!</p>` : ''}
         <button class="btn btn-primary" onclick="startExercise()" style="margin-top:8px">▶ Start Practice Now</button>
         <button class="btn btn-secondary" style="margin-top:12px" onclick="disableNotifications()">Turn Off Reminders</button>`;
 }
@@ -538,9 +706,45 @@ function renderSettings() {
         `<option value="${i}" ${i===sel?'selected':''}>${padTime(i)}</option>`).join('');
     const minOpts = (sel) => [0,15,30,45].map(m =>
         `<option value="${m}" ${m===sel?'selected':''}>${padTime(m)}</option>`).join('');
+
+    // Build pattern cards
+    const patternCards = BREATHING_PATTERNS.map(p => {
+        const sel = p.id === settingsPatternId;
+        const cycleSecs = calcCycleDuration(p);
+        return `
+            <div class="option-card ${sel ? 'option-card-selected' : ''}" onclick="selectPattern('${p.id}')">
+                <div class="option-card-name">${p.name}</div>
+                <div class="option-card-detail">${p.shortName} · ${cycleSecs}s/cycle</div>
+                <div class="option-card-desc">${p.description}</div>
+            </div>`;
+    }).join('');
+
+    // Build length cards with dynamic duration based on selected pattern
+    const selectedPattern = getPattern(settingsPatternId);
+    const lengthCards = SESSION_LENGTHS.map(l => {
+        const sel = l.id === settingsLengthId;
+        const totalSecs = calcTotalDuration(selectedPattern, l);
+        return `
+            <div class="option-card option-card-small ${sel ? 'option-card-selected' : ''}" onclick="selectLength('${l.id}')">
+                <div class="option-card-name">${l.name}</div>
+                <div class="option-card-detail">${l.cycles} cycles · ${formatDuration(totalSecs)}</div>
+            </div>`;
+    }).join('');
+
     appContent.innerHTML = `
         <div style="width:100%;max-width:500px">
             <h2 style="color:#ca8a04;margin-bottom:24px">Settings</h2>
+
+            <div class="settings-group">
+                <label class="settings-label">Breathing Pattern</label>
+                <div class="option-grid">${patternCards}</div>
+            </div>
+
+            <div class="settings-group">
+                <label class="settings-label">Session Length</label>
+                <div class="option-grid-row">${lengthCards}</div>
+            </div>
+
             <div class="settings-group">
                 <label class="settings-label">Active Hours Start</label>
                 <div class="time-selects">
@@ -575,13 +779,18 @@ function renderAbout() {
     appContent.innerHTML = `
         <div style="width:100%;max-width:500px;text-align:left">
             <h2 style="color:#ca8a04;margin-bottom:4px">Mindful Breathing</h2>
-            <p style="color:#6b7280;font-size:13px;margin-bottom:24px">Version 1.2 &nbsp;·&nbsp; EvolveChain Apps</p>
+            <p style="color:#6b7280;font-size:13px;margin-bottom:24px">Version 1.3 &nbsp;·&nbsp; EvolveChain Apps</p>
             <h3 style="color:#ca8a04;margin-bottom:8px">About</h3>
-            <p>Mindful Breathing helps you regulate your autonomic nervous system through guided box breathing exercises. The app sends gentle reminders throughout your day, prompting you to pause and breathe.</p>
-            <p style="margin-top:8px">Each session guides you through four cycles of controlled breathing: inhale for 4 seconds, hold for 4 seconds, then exhale for 8 seconds — a total of just over one minute.</p>
+            <p>Mindful Breathing helps you regulate your autonomic nervous system through guided breathing exercises. The app sends gentle reminders throughout your day, prompting you to pause and breathe.</p>
+            <h3 style="color:#ca8a04;margin-top:24px;margin-bottom:8px">Breathing Patterns</h3>
+            <p><strong style="color:#ffffff">Calm (4-4-8):</strong> Inhale 4s, hold 4s, exhale 8s. The extended exhale activates your parasympathetic nervous system for deep relaxation.</p>
+            <p style="margin-top:8px"><strong style="color:#ffffff">Classic Box (4-4-4-4):</strong> Equal phases of 4 seconds each, including a hold after exhale. Great for focus and balance.</p>
+            <p style="margin-top:8px"><strong style="color:#ffffff">Relaxing (4-7-8):</strong> Dr. Andrew Weil's technique. The long hold and extended exhale promote calm and help with sleep.</p>
+            <p style="margin-top:8px"><strong style="color:#ffffff">Energizing (6-6):</strong> Deep rhythmic breathing with no holds. Increases oxygen flow for alertness and energy.</p>
+            <p style="margin-top:8px"><strong style="color:#ffffff">Extended Calm (5-5-10):</strong> A slower, deeper version of the calm pattern for profound relaxation.</p>
             <h3 style="color:#ca8a04;margin-top:24px;margin-bottom:8px">How to Use</h3>
             <p>Enable reminders and the app will prompt you at random intervals throughout your chosen active hours. When a reminder arrives, tap Yes to begin a guided breathing session, or Not Now to dismiss it.</p>
-            <p style="margin-top:8px">Complete a full session to record it in your stats and maintain your streak. Partial sessions do not count towards your progress.</p>
+            <p style="margin-top:8px">Choose your preferred breathing pattern and session length in Settings. Complete a full session to record it in your stats and maintain your streak.</p>
             <h3 style="color:#ca8a04;margin-top:24px;margin-bottom:8px">Privacy Policy</h3>
             <p>Mindful Breathing is developed by EvolveChain Apps. We are committed to protecting your privacy.</p>
             <p style="margin-top:8px"><strong style="color:#ffffff">Data collection:</strong> This app does not collect, store, or transmit any personal data. All settings and preferences are stored locally on your device only.</p>
