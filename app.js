@@ -518,6 +518,22 @@ async function init() {
     applyTheme(state.settings.themeId);
     recalcStreak();
 
+    // Handle browser/Android back button
+    window.addEventListener('popstate', function(e) {
+        if (state.isExercising) {
+            stopExercise();
+        } else if (state.demoRunning) {
+            stopOnboardingDemo();
+        } else if (state.screen !== 'main' && state.screen !== 'onboarding') {
+            if (state.screen === 'settings') {
+                cancelSettings();
+            } else {
+                state.screen = 'main';
+                render();
+            }
+        }
+    });
+
     var onboardingDone = localStorage.getItem('onboardingComplete');
     if (!onboardingDone) {
         state.screen = 'onboarding';
@@ -758,6 +774,7 @@ function openSettings() {
     settingsThemeId   = state.settings.themeId;
     settingsSoundId   = state.settings.soundId;
     state.screen = 'settings';
+    history.pushState({screen:'settings'}, '');
     render();
 }
 
@@ -771,6 +788,27 @@ function selectTheme(id) {
 }
 
 function selectSound(id) { settingsSoundId = id; render(); }
+
+function openStats() {
+    state.screen = 'stats';
+    history.pushState({screen:'stats'}, '');
+    render();
+}
+
+function openAbout() {
+    state.screen = 'about';
+    history.pushState({screen:'about'}, '');
+    render();
+}
+
+function goBack() {
+    if (state.screen === 'settings') {
+        cancelSettings();
+    } else {
+        state.screen = 'main';
+        render();
+    }
+}
 
 function previewSound(id, event) {
     event.stopPropagation();
@@ -935,6 +973,7 @@ function startExercise() {
 
     state.showNotification = false;
     state.isExercising = true;
+    history.pushState({screen:'exercise'}, '');
     state.cycle = 1;
     state.totalCycles = sessionLength.cycles;
     state.activePhase = pattern.phases[0];
@@ -1278,7 +1317,7 @@ function renderStats() {
     var nextStrM = STREAK_MILESTONES.find(function(m) { return m[0] > currentStreak; });
 
     appContent.innerHTML = '<div style="width:100%;max-width:500px;text-align:left">' +
-        '<h2 style="color:var(--accent);margin-bottom:24px">Your Stats</h2>' +
+        '<div class="screen-header"><button class="back-btn" onclick="goBack()">← Back</button><h2>Your Stats</h2></div>' +
         '<div class="stats-grid">' +
             '<div class="stat-card"><div class="stat-value">' + totalSessions + '</div><div class="stat-label">Total Sessions</div></div>' +
             '<div class="stat-card"><div class="stat-value">' + sessionsToday() + '</div><div class="stat-label">Today</div></div>' +
@@ -1299,7 +1338,7 @@ function renderStats() {
                 '<div class="milestone-bar"><div class="milestone-fill" style="width:' + Math.min(100,(currentStreak/nextStrM[0])*100) + '%"></div></div>' +
                 '<p style="font-size:12px;color:var(--text-tertiary);margin-top:4px">' + (nextStrM[0]-currentStreak) + ' more days to next streak milestone</p>' +
             '</div>' : '') +
-        '<button class="btn btn-secondary" style="margin-top:32px" onclick="state.screen=\'main\';render()">← Back</button></div>';
+        '</div>';
 }
 
 // ─── Render: Settings ─────────────────────────────────────────────────────────
@@ -1358,7 +1397,7 @@ function renderSettings() {
     }).join('');
 
     appContent.innerHTML = '<div style="width:100%;max-width:500px">' +
-        '<h2 style="color:var(--accent);margin-bottom:24px">Settings</h2>' +
+        '<div class="screen-header"><button class="back-btn" onclick="cancelSettings()">← Back</button><h2>Settings</h2></div>' +
 
         '<div class="settings-group">' +
             '<label class="settings-label">Visual Theme</label>' +
@@ -1396,9 +1435,8 @@ function renderSettings() {
             '<div class="freq-labels"><span>More often</span><span>Less often</span></div>' +
             '<div id="freqLabel" class="freq-value">' + FREQ_PRESETS[freqIdx][2] + '</div></div>' +
 
-        '<div class="button-group" style="margin-top:32px">' +
+        '<div style="margin-top:32px;text-align:center">' +
             '<button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>' +
-            '<button class="btn btn-secondary" onclick="cancelSettings()">Cancel</button>' +
         '</div></div>';
 }
 
@@ -1406,8 +1444,8 @@ function renderSettings() {
 
 function renderAbout() {
     appContent.innerHTML = '<div style="width:100%;max-width:500px;text-align:left">' +
-        '<h2 style="color:var(--accent);margin-bottom:4px">Mindful Breathing</h2>' +
-        '<p style="color:var(--text-tertiary);font-size:13px;margin-bottom:24px">Version 1.4 &nbsp;·&nbsp; EvolveChain Apps</p>' +
+        '<div class="screen-header"><button class="back-btn" onclick="goBack()">← Back</button><h2>Mindful Breathing</h2></div>' +
+        '<p style="color:var(--text-tertiary);font-size:13px;margin-bottom:24px;margin-top:-16px">Version 1.4 &nbsp;·&nbsp; EvolveChain Apps</p>' +
         '<h3 style="color:var(--accent);margin-bottom:8px">About</h3>' +
         '<p>Mindful Breathing helps you regulate your autonomic nervous system through guided breathing exercises. The app sends gentle reminders throughout your day, prompting you to pause and breathe.</p>' +
         '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:8px">Breathing Patterns</h3>' +
@@ -1427,7 +1465,7 @@ function renderAbout() {
         '<p style="margin-top:8px"><strong style="color:var(--text)">Notifications:</strong> Notification permissions are used solely to deliver breathing reminders. No notification content is transmitted to any server.</p>' +
         '<p style="margin-top:8px"><strong style="color:var(--text)">Third parties:</strong> This app does not use any third-party analytics, advertising, or tracking services.</p>' +
         '<p style="margin-top:8px"><strong style="color:var(--text)">Changes:</strong> Any future changes to this privacy policy will be reflected in an updated version of the app.</p>' +
-        '<button class="btn btn-secondary" style="margin-top:32px" onclick="state.screen=\'main\';render()">← Back</button></div>';
+        '</div>';
 }
 
 setInterval(function() { if (!state.isExercising && !state.demoRunning) render(); }, 5000);
