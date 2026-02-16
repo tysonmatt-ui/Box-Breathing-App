@@ -59,6 +59,45 @@
         .milestone-label { display:flex; justify-content:space-between; font-size:12px; color:#9ca3af; margin-bottom:6px; }
         .milestone-bar { height:8px; background:#1f2937; border-radius:4px; overflow:hidden; }
         .milestone-fill { height:100%; background:#ca8a04; border-radius:4px; transition:width 0.5s ease; }
+
+        /* v1.3 - Pattern & Length selection cards */
+        .option-grid { display:flex; flex-direction:column; gap:8px; }
+        .option-grid-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .option-card {
+            background:#1f2937;
+            border:2px solid #374151;
+            border-radius:12px;
+            padding:14px 16px;
+            cursor:pointer;
+            transition:all 0.2s;
+            text-align:left;
+        }
+        .option-card:hover { border-color:rgba(202,138,4,0.5); }
+        .option-card-selected {
+            border-color:#ca8a04;
+            background:rgba(202,138,4,0.1);
+        }
+        .option-card-name {
+            font-size:15px;
+            font-weight:600;
+            color:#fff;
+            margin-bottom:2px;
+        }
+        .option-card-selected .option-card-name { color:#ca8a04; }
+        .option-card-detail {
+            font-size:12px;
+            color:#9ca3af;
+            margin-bottom:2px;
+        }
+        .option-card-desc {
+            font-size:12px;
+            color:#6b7280;
+        }
+        .option-card-small {
+            text-align:center;
+            padding:12px 8px;
+        }
+        .option-card-small .option-card-name { margin-bottom:4px; }
     </style>
 </head>
 <body>
@@ -67,7 +106,7 @@
             <h1>Mindful Breathing</h1>
             <div style="display:flex;align-items:center;gap:12px">
                 <button id="statsBtn" class="gear-btn" onclick="state.screen='stats';render()" title="Stats">📊</button>
-                <button id="gearBtn" class="gear-btn" onclick="state.screen='settings';render()" title="Settings">⚙️</button>
+                <button id="gearBtn" class="gear-btn" onclick="openSettings()" title="Settings">⚙️</button>
                 <span id="notificationIcon">🔔</span>
             </div>
         </div>
@@ -79,7 +118,7 @@
     </div>
 
     <div class="footer">
-        Active hours: 7:00 AM - 9:30 PM &nbsp;·&nbsp;
+        <span id="footerInfo">Active hours: 7:00 AM – 9:30 PM · Calm (4-4-8)</span> &nbsp;·&nbsp;
         <span onclick="state.screen='about';render()" style="color:#ca8a04;cursor:pointer">About</span>
     </div>
 
