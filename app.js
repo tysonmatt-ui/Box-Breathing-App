@@ -159,6 +159,9 @@ const AMBIENT_SOUNDS = [
 
 let state = {
     notificationsEnabled: false,
+    pushSupported: false,
+    fcmAvailable: false,
+    iosLimited: false,
     isExercising: false,
     showNotification: false,
     activePhase: null,
@@ -548,6 +551,9 @@ async function init() {
 function saveState() {
     localStorage.setItem('breathingApp', JSON.stringify({
         notificationsEnabled: state.notificationsEnabled,
+        pushSupported: state.pushSupported,
+        fcmAvailable: state.fcmAvailable,
+        iosLimited: state.iosLimited,
         nextNotificationTime: state.nextNotificationTime,
         fcmToken: state.fcmToken,
         settings: state.settings,
@@ -559,6 +565,9 @@ function loadState() {
     try {
         var saved = JSON.parse(localStorage.getItem('breathingApp') || '{}');
         state.notificationsEnabled = saved.notificationsEnabled || false;
+        state.pushSupported = saved.pushSupported || false;
+        state.fcmAvailable = saved.fcmAvailable || false;
+        state.iosLimited = saved.iosLimited || false;
         state.nextNotificationTime = saved.nextNotificationTime || null;
         state.fcmToken = saved.fcmToken || null;
         if (saved.settings) state.settings = Object.assign({}, state.settings, saved.settings);
@@ -616,56 +625,99 @@ async function scheduleFirebaseNotification(delayMinutes) {
     }
 }
 
+// ─── Platform Detection ───────────────────────────────────────────────────────
+
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+
+function isSafari() {
+    return /^((?!chrome|android|crios|fxios|brave).)*safari/i.test(navigator.userAgent);
+}
+
+function canDoPush() {
+    return 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+}
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 async function enableNotifications() {
-    if (!('Notification' in window)) { alert('Notifications not supported.'); return; }
-
-    var permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-        alert('Notifications were blocked. Please enable them in Chrome settings.');
-        return;
-    }
-
-    // Ensure Firebase is initialized (retry if init failed earlier)
-    if (!firebaseMessaging) {
-        try {
-            if (typeof firebase === 'undefined') {
-                alert('Notification service could not load. Please check your connection and refresh.');
-                return;
-            }
-            if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
-            if (!fcmSWRegistration) {
-                fcmSWRegistration = await navigator.serviceWorker.register(
-                    '/Box-Breathing-App/firebase-messaging-sw.js',
-                    { scope: '/Box-Breathing-App/' }
-                );
-            }
-            await fcmSWRegistration.update();
-            firebaseMessaging = firebase.messaging();
-            console.log('Firebase re-initialized successfully');
-        } catch (e) {
-            console.error('Firebase init retry failed:', e);
-            alert('Could not initialize notification service. Please refresh the page and try again.');
+    // iOS special handling
+    if (isIOS()) {
+        if (!isStandalone()) {
+            state.notificationsEnabled = true;
+            state.iosLimited = true;
+            saveState();
+            await scheduleNextNotification();
+            render();
             return;
         }
     }
 
-    var token = await getFCMToken();
-    if (!token) {
-        alert('Could not register for notifications. Please try again.');
+    // Non-iOS but no push support (rare browsers)
+    if (!canDoPush()) {
+        // Still enable in-app reminders
+        state.notificationsEnabled = true;
+        state.pushSupported = false;
+        saveState();
+        await scheduleNextNotification();
+        render();
         return;
     }
 
+    var permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+        // Still enable in-app reminders even without push permission
+        state.notificationsEnabled = true;
+        state.pushSupported = false;
+        saveState();
+        await scheduleNextNotification();
+        render();
+        return;
+    }
+
+    // Try Firebase for background push
+    state.pushSupported = true;
+    if (!firebaseMessaging) {
+        try {
+            if (typeof firebase !== 'undefined') {
+                if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+                if (!fcmSWRegistration) {
+                    fcmSWRegistration = await navigator.serviceWorker.register(
+                        '/Box-Breathing-App/firebase-messaging-sw.js',
+                        { scope: '/Box-Breathing-App/' }
+                    );
+                }
+                await fcmSWRegistration.update();
+                firebaseMessaging = firebase.messaging();
+                console.log('Firebase re-initialized successfully');
+            }
+        } catch (e) {
+            console.error('Firebase init retry failed:', e);
+        }
+    }
+
+    var token = null;
+    if (firebaseMessaging) {
+        token = await getFCMToken();
+    }
+
     state.notificationsEnabled = true;
+    state.fcmAvailable = !!token;
     saveState();
     await scheduleNextNotification();
 
+    // Show confirmation notification if possible
     try {
         var sw = swRegistration || fcmSWRegistration;
         if (sw) {
             await sw.showNotification('Notifications Enabled!', {
-                body: 'Your first breathing reminder is on its way.',
+                body: token ? 'You\'ll receive reminders even when the app is closed.'
+                            : 'You\'ll see reminders when the app is open.',
                 icon: 'icon-192.png',
                 tag: 'test'
             });
@@ -679,6 +731,9 @@ async function enableNotifications() {
 
 function disableNotifications() {
     state.notificationsEnabled = false;
+    state.pushSupported = false;
+    state.fcmAvailable = false;
+    state.iosLimited = false;
     state.nextNotificationTime = null;
     saveState();
     render();
@@ -692,7 +747,16 @@ async function scheduleNextNotification() {
     var mins = Math.floor(Math.random() * (freqMax - freqMin + 1)) + freqMin;
     state.nextNotificationTime = Date.now() + mins * 60 * 1000;
     saveState();
-    await scheduleFirebaseNotification(mins);
+
+    // Try FCM for background push (best-effort)
+    if (state.fcmToken) {
+        try {
+            await scheduleFirebaseNotification(mins);
+        } catch (e) {
+            console.log('FCM schedule failed (in-app timer will still work):', e);
+        }
+    }
+
     render();
 }
 
@@ -1028,7 +1092,7 @@ function stopExercise() {
     state.isExercising = false; render();
 }
 
-function dismissNotification() { state.showNotification = false; render(); }
+function dismissNotification() { state.showNotification = false; scheduleNextNotification(); }
 function dismissCelebration()  { state.celebration = null; render(); }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1271,10 +1335,23 @@ function renderMain() {
         return;
     }
     if (!state.notificationsEnabled) {
+        var iosMsg = '';
+        if (isIOS()) {
+            iosMsg = '<div style="background:var(--card-bg);border:1px solid var(--accent-dim);border-radius:12px;padding:16px;margin-bottom:20px;text-align:left;font-size:13px">' +
+                '<div style="color:var(--accent);font-weight:600;margin-bottom:8px">📱 iPhone Users</div>' +
+                '<p style="margin-bottom:8px;font-size:13px">For the best experience, add this app to your Home Screen:</p>' +
+                '<p style="margin-bottom:4px;font-size:13px">1. Tap the <strong style="color:var(--text)">Share</strong> button (📤)</p>' +
+                '<p style="margin-bottom:4px;font-size:13px">2. Scroll down and tap <strong style="color:var(--text)">Add to Home Screen</strong></p>' +
+                '<p style="margin-bottom:8px;font-size:13px">3. Open from your Home Screen</p>' +
+                '<p style="font-size:12px;color:var(--text-tertiary)">The app will still remind you when it\'s open, even without this step.</p>' +
+            '</div>';
+        }
+
         appContent.innerHTML = '<div class="idle-icon">🔔</div>' +
             '<h2>Enable Reminders</h2>' +
-            '<p>Allow notifications to receive mindful breathing reminders during your active hours.</p>' +
-            '<button class="btn btn-primary" onclick="enableNotifications()">Enable Notifications</button>';
+            '<p>Get mindful breathing reminders during your active hours.</p>' +
+            iosMsg +
+            '<button class="btn btn-primary" onclick="enableNotifications()">Enable Reminders</button>';
         return;
     }
 
@@ -1285,10 +1362,18 @@ function renderMain() {
     var totalSecs = calcTotalDuration(pattern, sessionLength);
     var sound = AMBIENT_SOUNDS.find(function(snd) { return snd.id === s.soundId; });
 
+    var notifMode = '';
+    if (state.iosLimited) {
+        notifMode = '<div style="font-size:12px;color:var(--text-tertiary);margin-top:-8px;margin-bottom:12px">📱 Reminders show when app is open · Add to Home Screen for background alerts</div>';
+    } else if (!state.fcmAvailable && !state.pushSupported) {
+        notifMode = '<div style="font-size:12px;color:var(--text-tertiary);margin-top:-8px;margin-bottom:12px">Reminders show when app is open · Keep the tab active for best results</div>';
+    }
+
     appContent.innerHTML = '<div class="idle-icon">🔔</div>' +
         '<h2>All Set!</h2>' +
         '<p>Reminders active between ' + fmtHour(s.startHour,s.startMin) + ' and ' + fmtHour(s.endHour,s.endMin) + '.</p>' +
         '<p style="font-size:13px;color:var(--accent);margin-top:-12px">' + FREQ_PRESETS[getCurrentFreqIndex()][2] + '</p>' +
+        notifMode +
         '<div class="current-program">' +
             '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:4px">' + pattern.name + ' (' + pattern.shortName + ')</div>' +
             '<div style="font-size:13px;color:var(--text-tertiary)">' + sessionLength.name + ' · ' + sessionLength.cycles + ' cycles · ' + formatDuration(totalSecs) + (sound && sound.id !== 'none' ? ' · ' + sound.icon + ' ' + sound.name : '') + '</div>' +
@@ -1468,5 +1553,26 @@ function renderAbout() {
         '</div>';
 }
 
-setInterval(function() { if (!state.isExercising && !state.demoRunning) render(); }, 5000);
+// ─── In-App Reminder Check ────────────────────────────────────────────────────
+
+function checkReminderTimer() {
+    if (state.isExercising || state.demoRunning || state.showNotification) return;
+    if (state.screen !== 'main') return;
+    if (!state.notificationsEnabled || !state.nextNotificationTime) return;
+
+    // If the scheduled time has passed and we're in waking hours, show the prompt
+    if (Date.now() >= state.nextNotificationTime && isWakingHours()) {
+        state.showNotification = true;
+        state.nextNotificationTime = null;
+        render();
+    }
+}
+
+setInterval(function() {
+    if (!state.isExercising && !state.demoRunning) {
+        checkReminderTimer();
+        render();
+    }
+}, 5000);
+
 init();
